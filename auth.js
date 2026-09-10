@@ -49,9 +49,16 @@ async function signInWithGoogle() {
     console.warn("[CloudSync] Sign-in unavailable: Supabase not configured.");
     return;
   }
+  // redirectTo must NOT carry the app's own #/... route -- this app uses
+  // hash-based routing, and Supabase appends its own #access_token=...
+  // fragment to whatever's already there rather than replacing it. Landing
+  // back on a bare "#/route#access_token=..." double-hash breaks both: the
+  // router sees garbage and resets, and the auth client never gets a clean
+  // read of the token. Strip to origin + pathname so Supabase's fragment is
+  // the only thing in the hash when the redirect lands.
   await supabase.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: window.location.href },
+    options: { redirectTo: window.location.origin + window.location.pathname },
   });
 }
 
