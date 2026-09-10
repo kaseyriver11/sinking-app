@@ -658,6 +658,7 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
       <button class="sync" id="syncBtn" data-state="local" title="Where your data is saved">
         <span class="dot"></span><span class="path" id="syncText">Not connected</span>
       </button>
+      <span id="account-control"></span>
       <button class="ghost sm" id="themeBtn" title="Toggle light/dark" aria-label="Toggle light/dark">◐</button>
       <nav class="tabs" aria-label="Sections">
         <button id="overviewBtn" data-tab="overview" title="Where you stand right now">Overview</button>
@@ -1168,6 +1169,8 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
 </dialog>
 
 <input type="file" id="importPicker" accept="application/json,.json" hidden>
+
+<script type="module" src="auth.js"></script>
 
 <script>
 "use strict";
@@ -3197,6 +3200,36 @@ async function boot() {
   dirHandle = handle;
   if (await hasPermission(handle, false)) await loadFromDir(handle);
   else setSync("needs-permission", "Reconnect " + handle.name);
+}
+
+/**
+ * Called by auth.js (a separate module, loaded deferred -- it always finishes
+ * executing after this classic script has already run boot() and defined
+ * every function here, which is what makes it safe for that module to reach
+ * back in and call this by name) once a signed-in session's cloud data has
+ * been fetched and reshaped back into the funds.json shape. Not called at
+ * all if the cloud side is empty (see auth.js) -- that's what stops signing
+ * in with nothing synced yet from blanking out whatever's currently loaded.
+ *
+ * dirHandle is cleared because cloud mode is this session's persistence
+ * target now -- the local file isn't written to while signed in. Actual
+ * cloud writes aren't wired yet (that's Phase 4); until then this is
+ * read-only, and any edit made while signed in only reaches the localStorage
+ * mirror, same as normal disconnected-folder behavior.
+ */
+function loadCloudState(raw) {
+  state = normalize(raw);
+  dirHandle = null;
+  clearDerivedCache();
+  render();
+  setSync("saved", "Synced to your account");
+}
+
+/** Sign-out just reloads -- the normal boot() path already does the right
+ *  thing for "no cloud session," and duplicating that logic here would be
+ *  two copies of the same decision that could drift apart. */
+function exitCloudMode() {
+  location.reload();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
