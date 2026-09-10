@@ -6220,11 +6220,13 @@ function viewMonth(mk) {
             ? `${mf.funded} of ${mf.want} funds` : "no budgets set")}
           ${kpi("Spent", money0(st.spent), `${spentRows.length} fund${spentRows.length === 1 ? "" : "s"} used`)}
           ${kpi("Remaining Budget", signed0(st.net), st.net >= 0 ? "within budget" : "over budget")}
-          ${kpi("Over budget", overs.length ? String(overs.length) : "none",
+          ${kpi("Over Budget", overs.length ? String(overs.length) : "none",
                 overs.length ? `by ${money0(overs.reduce((a, r) => a + r.over, 0))} in total`
                              : "every fund within plan")}
         </div>
-        ${!past && !future ? `<div class="month-bar" title="${Math.round(elapsed * 100)}% through the month">
+        ${!past && !future ? `<div class="muted" style="font-size:11px;margin-top:14px">
+            ${Math.round(elapsed * 100)}% through the month</div>
+          <div class="month-bar" style="margin-top:6px" title="${Math.round(elapsed * 100)}% through the month">
           <div style="width:${(elapsed * 100).toFixed(1)}%"></div></div>` : ""}
       </section>
 
@@ -6278,6 +6280,34 @@ function viewMonth(mk) {
               >Budget ${money0(r.spent)}</button>
           </div>`).join("")}</div>
       </section>` : ""}
+
+      ${(() => {
+        const expenses = expensesOf({}).filter(e => monthKey(e.date) === mk)
+          .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+        if (!expenses.length) return "";
+        const total = expenses.reduce((s, e) => s + Math.abs(e.amount), 0);
+        return `<section class="card">
+          <div class="spread" style="margin-bottom:10px">
+            <div><h2>All expenses</h2>
+              <div class="muted" style="font-size:12px">${expenses.length} expense${expenses.length === 1 ? "" : "s"}
+                · ${money0(total)} · ${escapeHtml(monthLabel(mk, true))}</div></div>
+          </div>
+          <div class="scroll"><table class="entries">
+            <thead><tr><th class="c-date">Date</th><th class="num c-amt">Amount</th>
+              <th>Fund</th><th>Note</th></tr></thead>
+            <tbody>${expenses.map(e => {
+              const f = fundById(e.fundId), cat = f && catById(f.categoryId);
+              return `<tr>
+                <td class="c-date">${fmtEntryDay(e.date)}</td>
+                <td class="num c-amt expense">−${money(Math.abs(e.amount))}</td>
+                <td>${f ? `<button class="linkish" data-goexp="${f.id}">${escapeHtml(f.name)}</button>
+                  <span class="muted" style="font-size:11px"> · ${escapeHtml(cat ? cat.name : "")}</span>` : "—"}</td>
+                <td class="c-note muted">${escapeHtml(e.note || "—")}${
+                  e.splitId ? ` <span class="tag" data-tip="${escapeHtml(splitTip(e))}">split</span>` : ""}</td>
+              </tr>`;
+            }).join("")}</tbody></table></div>
+        </section>`;
+      })()}
     </div>`;
 
   $("#backBtn").onclick = () => go({ name: "overview" });
@@ -6288,6 +6318,7 @@ function viewMonth(mk) {
   $("#mCredit").onclick = () => openEntry(null, +1, mk);
   $("#mExpense").onclick = () => openEntry(null, -1, mk);
   $$("[data-goover]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goover }));
+  $$("[data-goexp]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goexp }));
   $$("[data-rebudget]").forEach(b => b.onclick = () => {
     const f = fundById(b.dataset.rebudget), amt = Number(b.dataset.amt);
     const was = budgetOfFund(f);
