@@ -323,6 +323,35 @@ function syncSettings(planStart) {
   return cloudCall(() => supabase.from("settings").upsert(cloudRow({ plan_start: planStart || null })));
 }
 
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * One-time push of the currently-loaded local state into the signed-in
+ * user's cloud tables -- reuses the exact same per-entity sync functions
+ * every ordinary edit already goes through, just run once over everything.
+ * Callers are expected to have already confirmed with the user and checked
+ * fetchAppState() came back empty first (see index.html's #mCloudImport) --
+ * this function itself doesn't guard against overwriting real cloud data,
+ * it just does the writes.
+ */
+async function migrateLocalState(state) {
+  if (!configured || !currentSession) return { error: "Not signed in" };
+  for (const [i, c] of state.categories.entries()) await syncCategory(c, i);
+  for (const [i, f] of state.funds.entries()) await syncFund(f, i);
+  for (const batch of chunk(state.ledger, 500)) await syncLedgerEntries(batch);
+  for (const p of state.plans || []) await syncPlan(p);
+  for (const r of state.cashReadings || []) await syncCashReading(r);
+  for (const r of state.cardReadings || []) await syncCardReading(r);
+  for (const o of (state.meta.oneOffs || [])) await syncOneOff(o);
+  await syncIncomes(state.meta.incomes || []);
+  await syncSettings(state.meta.planStart);
+  return { error: null };
+}
+
 // Drives the main app's cloud-vs-local switch. A session appearing (whether
 // a persisted one found on load, or a fresh sign-in) fetches and hands off
 // the reshaped state; a session disappearing -- but only a REAL sign-out,
@@ -413,4 +442,5 @@ window.CloudSync = {
   syncOneOff,
   deleteOneOffCloud,
   syncSettings,
+  migrateLocalState,
 };

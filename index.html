@@ -1154,6 +1154,7 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
       <button id="mExport">Export a JSON snapshot</button>
       <button id="mCSV">Export the ledger as CSV</button>
       <button id="mImport">Import from a JSON file…</button>
+      <button id="mCloudImport" hidden>Import your local budget into your account…</button>
     </div>
     <div class="hint" style="margin-top:14px">
       Every save writes <code>data/funds.json</code> in the folder you pick, plus a dated
@@ -7590,8 +7591,41 @@ function openMenu() {
     ? `Writing to ${dirHandle.name}/data/funds.json`
     : hasFS ? "Not connected to a folder — data lives in this browser only."
             : "This browser can't write to a folder directly. Export snapshots to keep a copy.";
+  refreshCloudImportBtn();
   $("#menuDlg").showModal();
 }
+
+/**
+ * Only ever offered signed-in with an empty cloud account -- checking is
+ * async (a real fetch), so the button starts hidden and appears once the
+ * check resolves, rather than showing something clickable that might be
+ * wrong for a moment. This is what stops a second sign-in on an account
+ * that's already synced from re-running the migration over itself.
+ */
+async function refreshCloudImportBtn() {
+  const btn = $("#mCloudImport");
+  btn.hidden = true;
+  if (!window.CloudSync?.isSignedIn()) return;
+  const existing = await window.CloudSync.fetchAppState();
+  if (existing) return;   // already has synced data -- don't offer it again
+  btn.hidden = false;
+}
+
+$("#mCloudImport").addEventListener("click", async () => {
+  const n = state.categories.length, f = state.funds.length, e = state.ledger.length;
+  if (!confirm(`Import ${n} categor${n === 1 ? "y" : "ies"}, ${f} fund${f === 1 ? "" : "s"} ` +
+      `and ${e} ledger entr${e === 1 ? "y" : "ies"} into your account?\n\n` +
+      `This is one-time — it copies what's currently loaded up to the cloud. ` +
+      `Your local file is untouched either way.`)) return;
+  const btn = $("#mCloudImport");
+  btn.disabled = true;
+  btn.textContent = "Importing…";
+  const { error } = await window.CloudSync.migrateLocalState(state);
+  btn.disabled = false;
+  if (error) { btn.textContent = "Import your local budget into your account…"; alert("Import failed: " + error); return; }
+  btn.hidden = true;
+  alert("Imported. Reload the page to switch this session over to your synced account.");
+});
 
 hoverTip.bind();
 hoverTable.bind();
