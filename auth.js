@@ -140,11 +140,14 @@ async function fetchAppState() {
     },
     cashReadings: (cashReadings.data || []).map(r => ({ id: r.id, date: r.date, amount: Number(r.amount), note: r.note || "" })),
     cardReadings: (cardReadings.data || []).map(r => ({ id: r.id, date: r.date, amount: Number(r.amount), note: r.note || "" })),
-    categories: categories.data.map(c => ({
+    // sort_order is what stands in for array position server-side (SQL rows
+    // have no inherent order) -- sort by it here so the reshaped arrays come
+    // back in the same order the local file would have had them in.
+    categories: [...categories.data].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(c => ({
       id: c.id, name: c.name, icon: c.icon, color: c.color, note: c.note || "",
       createdAt: c.created_at, archivedAt: c.archived_at,
     })),
-    funds: (funds.data || []).map(f => ({
+    funds: [...(funds.data || [])].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(f => ({
       id: f.id, categoryId: f.category_id, name: f.name,
       budgets: budgetsByFund[f.id] || [],
       target: Number(f.target) || 0, targetDate: f.target_date || "",
@@ -163,6 +166,161 @@ async function fetchAppState() {
       month: p.month || "", note: p.note || "", createdAt: p.created_at, settledAt: p.settled_at,
     })),
   };
+}
+
+/* ── cloud writes ────────────────────────────────────────────────────────
+ * Every mutation function in the main script keeps its existing synchronous
+ * local write exactly as it is -- these calls are additive, fired after the
+ * local mutation, fire-and-forget. A failure here (offline, the still-open
+ * PGRST303 bug, anything) is logged and left; `state` is already correct
+ * locally, and a full offline write-queue is out of scope for this pass,
+ * the same way DVCalc shipped without one. Every call is a no-op when not
+ * configured or not signed in, so signed-out behavior never changes.
+ */
+
+function cloudRow(row) {
+  return { ...row, user_id: currentSession.user.id };
+}
+
+async function cloudCall(fn) {
+  if (!configured || !currentSession) return;
+  try {
+    const { error } = await fn();
+    if (error) console.error("[CloudSync] write failed:", error.message);
+  } catch (err) {
+    console.error("[CloudSync] write threw:", err.message);
+  }
+}
+
+// Categories/funds carry no sortOrder field locally -- order is purely
+// array position in JS, so the index has to come from the caller (which has
+// the array); it's read straight off state.categories/state.funds there.
+function categoryRow(c, index) {
+  return { id: c.id, name: c.name, icon: c.icon, color: c.color, note: c.note || "",
+    sort_order: index || 0, archived_at: c.archivedAt || null, created_at: c.createdAt || null };
+}
+function fundRow(f, index) {
+  return { id: f.id, category_id: f.categoryId, name: f.name,
+    target: f.target || 0, target_date: f.targetDate || null,
+    schedule_amounts: f.schedule ? f.schedule.amounts : null,
+    buffer: !!f.buffer, floor: f.floor || 0, fixed: !!f.fixed, due_day: f.dueDay || 0,
+    ceiling: f.ceiling || 0, note: f.note || "", sort_order: index || 0,
+    archived_at: f.archivedAt || null, created_at: f.createdAt || null };
+}
+function ledgerRow(e) {
+  return { id: e.id, fund_id: e.fundId, amount: e.amount, date: e.date, note: e.note || "",
+    kind: e.kind || null, pair_id: e.pairId || null, split_id: e.splitId || null,
+    created_at: e.createdAt || null, updated_at: e.updatedAt || null };
+}
+function readingRow(r) {
+  return { id: r.id, date: r.date, amount: r.amount, note: r.note || "" };
+}
+function planRow(p) {
+  return { id: p.id, fund_id: p.fundId, name: p.name, amount: p.amount,
+    month: p.month || "", note: p.note || "", created_at: p.createdAt || null, settled_at: p.settledAt || null };
+}
+function oneOffRow(o) {
+  return { id: o.id, month: o.month, amount: o.amount, note: o.note || "" };
+}
+
+/**
+ * Any change to a category -- add, edit, archive/unarchive. `index` is this
+ * category's current position in state.categories (the caller's array), the
+ * stand-in for its sort order.
+ */
+function syncCategory(c, index) {
+  return cloudCall(() => supabase.from("categories").upsert(cloudRow(categoryRow(c, index))));
+}
+/** After moveCategory() -- re-syncs every category's position in one call. */
+function syncCategoryOrder(categories) {
+  if (!categories.length) return;
+  return cloudCall(() => supabase.from("categories")
+    .upsert(categories.map((c, i) => cloudRow(categoryRow(c, i)))));
+}
+/** Cascades to its funds/ledger/fund_budgets/plans server-side (on delete cascade). */
+function deleteCategoryCloud(id) {
+  return cloudCall(() => supabase.from("categories").delete().eq("id", id));
+}
+
+/**
+ * Any change to a fund -- add, edit, archive/unarchive, a budget or schedule
+ * change. `index` is this fund's position in state.funds. Always re-syncs
+ * the fund's whole budgets[] alongside it (delete-then-insert) rather than
+ * trying to track which single month changed, because setBudget() can both
+ * add AND collapse-remove a month in one call -- replacing the set wholesale
+ * is simpler than mirroring that logic here, and budgets[] is always small.
+ */
+async function syncFund(f, index) {
+  if (!configured || !currentSession) return;
+  await cloudCall(() => supabase.from("funds").upsert(cloudRow(fundRow(f, index))));
+  await cloudCall(() => supabase.from("fund_budgets").delete().eq("fund_id", f.id));
+  const rows = (f.budgets || []).map(b => cloudRow({ id: `${f.id}:${b.from}`, fund_id: f.id, from_month: b.from, amount: b.amount }));
+  if (rows.length) await cloudCall(() => supabase.from("fund_budgets").insert(rows));
+}
+/** After moveFund() -- re-syncs every fund's position in one call (budgets untouched, a reorder never changes them). */
+function syncFundOrder(funds) {
+  if (!funds.length) return;
+  return cloudCall(() => supabase.from("funds")
+    .upsert(funds.map((f, i) => cloudRow(fundRow(f, i)))));
+}
+/** Cascades to its ledger/fund_budgets/plans server-side. */
+function deleteFundCloud(id) {
+  return cloudCall(() => supabase.from("funds").delete().eq("id", id));
+}
+
+function syncLedgerEntry(e) {
+  return cloudCall(() => supabase.from("ledger").upsert(cloudRow(ledgerRow(e))));
+}
+/** For moveMoney (2 rows) and addSplitExpense (N rows) -- one round trip. */
+function syncLedgerEntries(entries) {
+  if (!entries.length) return;
+  return cloudCall(() => supabase.from("ledger").upsert(entries.map(e => cloudRow(ledgerRow(e)))));
+}
+function deleteLedgerEntry(id) {
+  return cloudCall(() => supabase.from("ledger").delete().eq("id", id));
+}
+function deleteLedgerBy(column, value) {
+  return cloudCall(() => supabase.from("ledger").delete().eq(column, value));
+}
+
+function syncCashReading(r) {
+  return cloudCall(() => supabase.from("cash_readings").upsert(cloudRow(readingRow(r))));
+}
+function deleteCashReadingCloud(id) {
+  return cloudCall(() => supabase.from("cash_readings").delete().eq("id", id));
+}
+function syncCardReading(r) {
+  return cloudCall(() => supabase.from("card_readings").upsert(cloudRow(readingRow(r))));
+}
+function deleteCardReadingCloud(id) {
+  return cloudCall(() => supabase.from("card_readings").delete().eq("id", id));
+}
+
+function syncPlan(p) {
+  return cloudCall(() => supabase.from("plans").upsert(cloudRow(planRow(p))));
+}
+function deletePlanCloud(id) {
+  return cloudCall(() => supabase.from("plans").delete().eq("id", id));
+}
+
+/** Whole-list replace, same reasoning as syncFund's budgets -- setIncome()
+ *  can add and collapse-remove a month in one call. */
+async function syncIncomes(list) {
+  if (!configured || !currentSession) return;
+  await cloudCall(() => supabase.from("incomes").delete().eq("user_id", currentSession.user.id));
+  const rows = (list || []).map(i => cloudRow({ id: `inc:${i.from}`, from_month: i.from, amount: i.amount }));
+  if (rows.length) await cloudCall(() => supabase.from("incomes").insert(rows));
+}
+
+function syncOneOff(o) {
+  return cloudCall(() => supabase.from("one_offs").upsert(cloudRow(oneOffRow(o))));
+}
+function deleteOneOffCloud(id) {
+  return cloudCall(() => supabase.from("one_offs").delete().eq("id", id));
+}
+
+function syncSettings(planStart) {
+  return cloudCall(() => supabase.from("settings").upsert(cloudRow({ plan_start: planStart || null })));
 }
 
 // Drives the main app's cloud-vs-local switch. A session appearing (whether
@@ -235,4 +393,24 @@ window.CloudSync = {
   isSignedIn,
   isConfigured: () => configured,
   fetchAppState,
+  syncCategory,
+  syncCategoryOrder,
+  deleteCategoryCloud,
+  syncFund,
+  syncFundOrder,
+  deleteFundCloud,
+  syncLedgerEntry,
+  syncLedgerEntries,
+  deleteLedgerEntry,
+  deleteLedgerBy,
+  syncCashReading,
+  deleteCashReadingCloud,
+  syncCardReading,
+  deleteCardReadingCloud,
+  syncPlan,
+  deletePlanCloud,
+  syncIncomes,
+  syncOneOff,
+  deleteOneOffCloud,
+  syncSettings,
 };

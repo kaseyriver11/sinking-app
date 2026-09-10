@@ -2394,6 +2394,7 @@ function setBudget(f, amount, from) {
   for (let i = list.length - 1; i > 0; i--) {
     if (list[i].amount === list[i - 1].amount) list.splice(i, 1);
   }
+  window.CloudSync?.syncFund(f, state.funds.indexOf(f));
 }
 
 function incomeAt(mk) {
@@ -2411,6 +2412,7 @@ function setIncome(amount, from) {
   for (let i = list.length - 1; i > 0; i--) {
     if (list[i].amount === list[i - 1].amount) list.splice(i, 1);
   }
+  window.CloudSync?.syncIncomes(list);
 }
 
 const budgetOfCat = (catId, mk) => fundsOf(catId).reduce((s, f) => s + budgetOfFund(f, mk), 0);
@@ -3254,12 +3256,14 @@ function addCategory(vals) {
   }, vals);
   state.categories.push(c);
   save();
+  window.CloudSync?.syncCategory(c, state.categories.indexOf(c));
   return c;
 }
 function updateCategory(id, patch) {
   const c = catById(id);
   if (c) Object.assign(c, patch);
   save();
+  if (c) window.CloudSync?.syncCategory(c, state.categories.indexOf(c));
 }
 
 /* ── funds: where the money lives ────────────────────────────────────────── */
@@ -3271,12 +3275,14 @@ function addFund(vals) {
   }, vals);
   state.funds.push(f);
   save();
+  window.CloudSync?.syncFund(f, state.funds.indexOf(f));
   return f;
 }
 function updateFund(id, patch) {
   const f = fundById(id);
   if (f) Object.assign(f, patch);
   save();
+  if (f) window.CloudSync?.syncFund(f, state.funds.indexOf(f));
 }
 
 /**
@@ -3294,6 +3300,7 @@ function moveCategory(id, dir) {
   const to = list.findIndex(c => c.id === target.id);
   list.splice(to, 0, list.splice(from, 1)[0]);
   save();
+  window.CloudSync?.syncCategoryOrder(state.categories);
 }
 function moveFund(id, dir) {
   const f = fundById(id);
@@ -3307,6 +3314,7 @@ function moveFund(id, dir) {
   const to = list.findIndex(x => x.id === target.id);
   list.splice(to, 0, list.splice(from, 1)[0]);
   save();
+  window.CloudSync?.syncFundOrder(state.funds);
 }
 
 /* ── ledger entries ──────────────────────────────────────────────────────── */
@@ -3314,8 +3322,10 @@ function moveFund(id, dir) {
 function addEntry(fundId, amount, date, note, kind = null) {
   clearDerivedCache();
   const now = new Date().toISOString();
-  state.ledger.push({ id: uid(), fundId, amount, date, note, kind, createdAt: now, updatedAt: now });
+  const e = { id: uid(), fundId, amount, date, note, kind, createdAt: now, updatedAt: now };
+  state.ledger.push(e);
   save();
+  window.CloudSync?.syncLedgerEntry(e);
 }
 
 /** A real edit: the row changes in place. */
@@ -3325,6 +3335,7 @@ function editEntry(entryId, patch) {
   if (!e) return;
   Object.assign(e, patch, { updatedAt: new Date().toISOString() });
   save();
+  window.CloudSync?.syncLedgerEntry(e);
 }
 
 /**
@@ -3339,6 +3350,7 @@ function restoreEntry(entry) {
   state.meta.deleted = state.meta.deleted.filter(id => id !== entry.id);
   if (!state.ledger.some(e => e.id === entry.id)) state.ledger.push(entry);
   save();
+  window.CloudSync?.syncLedgerEntry(entry);
 }
 
 function deleteEntry(entryId) {
@@ -3349,6 +3361,7 @@ function deleteEntry(entryId) {
     state.meta.deleted.push(entryId);
   }
   save();
+  window.CloudSync?.deleteLedgerEntry(entryId);
 }
 
 /* ── moving money ────────────────────────────────────────────────────────── */
@@ -3372,18 +3385,21 @@ function moveMoney(fromFundId, toFundId, amount, date, note) {
   const label = note || (toFundId
     ? `Moved to ${fundById(toFundId)?.name || "another fund"}`
     : "Released to unallocated");
+  const legs = [];
 
   if (fromFundId) {
-    state.ledger.push({ id: uid(), fundId: fromFundId, amount: -amount, date,
+    legs.push({ id: uid(), fundId: fromFundId, amount: -amount, date,
       note: label, kind: "transfer", pairId, createdAt: now, updatedAt: now });
   }
   if (toFundId) {
-    state.ledger.push({ id: uid(), fundId: toFundId, amount: amount, date,
+    legs.push({ id: uid(), fundId: toFundId, amount: amount, date,
       note: note || (fromFundId ? `Moved from ${fundById(fromFundId)?.name || "another fund"}`
                                 : "Allocated from unallocated"),
       kind: "transfer", pairId, createdAt: now, updatedAt: now });
   }
+  state.ledger.push(...legs);
   save();
+  window.CloudSync?.syncLedgerEntries(legs);
 }
 
 /** removing one leg of a transfer must remove the other, or money appears */
@@ -3393,6 +3409,7 @@ function deleteTransfer(pairId) {
   state.ledger = state.ledger.filter(e => e.pairId !== pairId);
   for (const id of gone) if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deleteLedgerBy("pair_id", pairId);
 }
 
 /* ── split expense ───────────────────────────────────────────────────────── */
@@ -3413,11 +3430,11 @@ function addSplitExpense(parts, date, note) {
   clearDerivedCache();
   const now = new Date().toISOString();
   const splitId = uid();
-  for (const p of parts) {
-    state.ledger.push({ id: uid(), fundId: p.fundId, amount: -Math.abs(p.amt), date, note,
-      kind: null, splitId, createdAt: now, updatedAt: now });
-  }
+  const entries = parts.map(p => ({ id: uid(), fundId: p.fundId, amount: -Math.abs(p.amt), date, note,
+    kind: null, splitId, createdAt: now, updatedAt: now }));
+  state.ledger.push(...entries);
   save();
+  window.CloudSync?.syncLedgerEntries(entries);
   return splitId;
 }
 
@@ -3428,6 +3445,7 @@ function deleteSplitGroup(splitId) {
   state.ledger = state.ledger.filter(e => e.splitId !== splitId);
   for (const id of gone) if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deleteLedgerBy("split_id", splitId);
 }
 
 /** what the "split" tag's tooltip shows on any one part */
@@ -3465,18 +3483,22 @@ function matchFundLoose(text) {
 /* ── earmarks ────────────────────────────────────────────────────────────── */
 
 function addPlan(vals) {
-  state.plans.push(Object.assign({ id: uid(), createdAt: new Date().toISOString(), settledAt: null }, vals));
+  const pl = Object.assign({ id: uid(), createdAt: new Date().toISOString(), settledAt: null }, vals);
+  state.plans.push(pl);
   save();
+  window.CloudSync?.syncPlan(pl);
 }
 function updatePlan(id, patch) {
   const pl = state.plans.find(x => x.id === id);
   if (pl) Object.assign(pl, patch);
   save();
+  if (pl) window.CloudSync?.syncPlan(pl);
 }
 function deletePlan(id) {
   state.plans = state.plans.filter(pl => pl.id !== id);
   if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deletePlanCloud(id);
 }
 /** the trip happened: book the expense and close the earmark in one step */
 function settlePlan(id, amount, date) {
@@ -3484,19 +3506,22 @@ function settlePlan(id, amount, date) {
   const pl = state.plans.find(x => x.id === id);
   if (!pl) return;
   const now = new Date().toISOString();
-  state.ledger.push({ id: uid(), fundId: pl.fundId, amount: -Math.abs(amount),
-    date, note: pl.name, kind: null, createdAt: now, updatedAt: now });
+  const e = { id: uid(), fundId: pl.fundId, amount: -Math.abs(amount),
+    date, note: pl.name, kind: null, createdAt: now, updatedAt: now };
+  state.ledger.push(e);
   pl.settledAt = todayStr();
   save();
+  window.CloudSync?.syncLedgerEntry(e);
+  window.CloudSync?.syncPlan(pl);
 }
 
 /** Archiving hides something but keeps every row. Reversible. */
 function archiveCategory(id) {
-  fundsOf(id).forEach(f => { f.archivedAt = todayStr(); });
+  fundsOf(id).forEach(f => { f.archivedAt = todayStr(); window.CloudSync?.syncFund(f, state.funds.indexOf(f)); });
   updateCategory(id, { archivedAt: todayStr() });
 }
 function unarchiveCategory(id) {
-  state.funds.filter(f => f.categoryId === id).forEach(f => { f.archivedAt = null; });
+  state.funds.filter(f => f.categoryId === id).forEach(f => { f.archivedAt = null; window.CloudSync?.syncFund(f, state.funds.indexOf(f)); });
   updateCategory(id, { archivedAt: null });
 }
 const unarchiveFund = (id) => updateFund(id, { archivedAt: null });
@@ -3516,6 +3541,9 @@ function deleteFund(id) {
   purgeEntriesOf([id]);
   state.funds = state.funds.filter(f => f.id !== id);
   save();
+  // cascades to its ledger/fund_budgets/plans server-side -- no need to
+  // mirror purgeEntriesOf's per-entry tombstoning for the cloud path
+  window.CloudSync?.deleteFundCloud(id);
 }
 
 /** Deleting a category takes every fund inside it, and their history. */
@@ -3525,6 +3553,8 @@ function deleteCategory(id) {
   state.funds = state.funds.filter(f => f.categoryId !== id);
   state.categories = state.categories.filter(c => c.id !== id);
   save();
+  // cascades to its funds/ledger/fund_budgets/plans server-side
+  window.CloudSync?.deleteCategoryCloud(id);
 }
 
 /** what a delete would take with it — shown in the confirm before you commit */
@@ -4371,18 +4401,21 @@ function updateOneOff(id, patch) {
   Object.assign(o, patch);
   state.meta.oneOffs.sort((a, b) => a.month.localeCompare(b.month));
   save();
+  window.CloudSync?.syncOneOff(o);
 }
 
 function addOneOff(month, amount, note) {
-  (state.meta.oneOffs || (state.meta.oneOffs = []))
-    .push({ id: uid(), month, amount, note: note || "" });
+  const o = { id: uid(), month, amount, note: note || "" };
+  (state.meta.oneOffs || (state.meta.oneOffs = [])).push(o);
   state.meta.oneOffs.sort((a, b) => a.month.localeCompare(b.month));
   save();
+  window.CloudSync?.syncOneOff(o);
 }
 function deleteOneOff(id) {
   state.meta.oneOffs = (state.meta.oneOffs || []).filter(o => o.id !== id);
   if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deleteOneOffCloud(id);
 }
 
 /* ── needs attention ─────────────────────────────────────────────────────── */
@@ -5511,6 +5544,7 @@ function renderMoves(fundId) {
         if (!state.ledger.some(y => y.id === x.id)) state.ledger.push(x);
       });
       save();
+      window.CloudSync?.syncLedgerEntries(pair);
     });
   });
 }
@@ -6529,6 +6563,7 @@ function renderOneOffs() {
       (state.meta.oneOffs || (state.meta.oneOffs = [])).push(snap);
       state.meta.oneOffs.sort((a, b) => a.month.localeCompare(b.month));
       save();
+      window.CloudSync?.syncOneOff(snap);
     });
   });
 }
@@ -7243,11 +7278,11 @@ $("#monthForm").addEventListener("submit", (ev) => {
   if (!rows.length) { ev.preventDefault(); return; }
   const now = new Date().toISOString();
   clearDerivedCache();
-  for (const r of rows) {
-    state.ledger.push({ id: uid(), fundId: r.id, amount: r.amt, date, note,
-      kind: "allotment", createdAt: now, updatedAt: now });
-  }
+  const entries = rows.map(r => ({ id: uid(), fundId: r.id, amount: r.amt, date, note,
+    kind: "allotment", createdAt: now, updatedAt: now }));
+  state.ledger.push(...entries);
   save();
+  window.CloudSync?.syncLedgerEntries(entries);
 });
 
 /* ── split expense ───────────────────────────────────────────────────────── */
@@ -7435,15 +7470,18 @@ function openCash() {
  */
 function setCashReading(amount, date, note) {
   const existing = state.cashReadings.find(r => r.date === date);
+  const r = existing || { id: uid(), date, amount, note: note || "" };
   if (existing) Object.assign(existing, { amount, note });
-  else state.cashReadings.push({ id: uid(), date, amount, note: note || "" });
+  else state.cashReadings.push(r);
   state.cashReadings.sort((a, b) => a.date.localeCompare(b.date));
+  window.CloudSync?.syncCashReading(r);
 }
 
 function deleteCashReading(id) {
   state.cashReadings = state.cashReadings.filter(r => r.id !== id);
   if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deleteCashReadingCloud(id);
   renderCashHistory();
   cashPreview();
 }
@@ -7472,15 +7510,18 @@ function renderCashHistory() {
 /** same shape as setCashReading, for what's owed on the credit card */
 function setCardReading(amount, date, note) {
   const existing = state.cardReadings.find(r => r.date === date);
+  const r = existing || { id: uid(), date, amount, note: note || "" };
   if (existing) Object.assign(existing, { amount, note });
-  else state.cardReadings.push({ id: uid(), date, amount, note: note || "" });
+  else state.cardReadings.push(r);
   state.cardReadings.sort((a, b) => a.date.localeCompare(b.date));
+  window.CloudSync?.syncCardReading(r);
 }
 
 function deleteCardReading(id) {
   state.cardReadings = state.cardReadings.filter(r => r.id !== id);
   if (!state.meta.deleted.includes(id)) state.meta.deleted.push(id);
   save();
+  window.CloudSync?.deleteCardReadingCloud(id);
   renderCardHistory();
   cashPreview();
 }
@@ -7536,7 +7577,7 @@ $("#cashForm").addEventListener("submit", (ev) => {
   const v = Number($("#cash-amt").value);
   if (!(v >= 0)) { ev.preventDefault(); return; }
   const ps = $("#cash-plan").value;
-  if (/^\d{4}-\d{2}$/.test(ps)) state.meta.planStart = ps;
+  if (/^\d{4}-\d{2}$/.test(ps)) { state.meta.planStart = ps; window.CloudSync?.syncSettings(ps); }
   setCashReading(v, $("#cash-date").value || todayStr(), $("#cash-note").value.trim());
   setCardReading(Math.max(0, Number($("#card-amt").value) || 0),
     $("#cash-date").value || todayStr(), $("#card-note").value.trim());

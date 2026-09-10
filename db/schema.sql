@@ -91,12 +91,17 @@ create table if not exists categories (
   icon text not null default '💡',
   color text not null,
   note text not null default '',
+  -- Array position IS display order locally ("Array order is display order
+  -- for both" -- CLAUDE.md's Data model section); SQL rows have no inherent
+  -- order, so this is what stands in for it here.
+  sort_order integer not null default 0,
   archived_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 create index if not exists categories_user_id_idx on categories(user_id);
+create index if not exists categories_user_sort_idx on categories(user_id, sort_order);
 
 alter table categories enable row level security;
 create policy "categories: full access to own rows" on categories
@@ -127,6 +132,7 @@ create table if not exists funds (
   due_day int not null default 0,
   ceiling numeric(12,2) not null default 0,
   note text not null default '',
+  sort_order integer not null default 0,   -- same reasoning as categories.sort_order
   archived_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -134,6 +140,7 @@ create table if not exists funds (
 
 create index if not exists funds_user_id_idx on funds(user_id);
 create index if not exists funds_category_id_idx on funds(category_id);
+create index if not exists funds_user_sort_idx on funds(user_id, sort_order);
 
 alter table funds enable row level security;
 create policy "funds: full access to own rows" on funds
