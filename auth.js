@@ -185,7 +185,7 @@ function cloudRow(row) {
 async function cloudCall(fn) {
   if (!configured || !currentSession) return;
   try {
-    const { error } = await fn();
+    const { error } = await withRetry(fn);
     if (error) console.error("[CloudSync] write failed:", error.message);
   } catch (err) {
     console.error("[CloudSync] write threw:", err.message);
@@ -340,13 +340,40 @@ function chunk(arr, size) {
  */
 async function migrateLocalState(state) {
   if (!configured || !currentSession) return { error: "Not signed in" };
-  for (const [i, c] of state.categories.entries()) await syncCategory(c, i);
-  for (const [i, f] of state.funds.entries()) await syncFund(f, i);
+  // Batched, not one row/fund at a time (the first version was ~90+ sequential
+  // round trips for a real 30-fund budget -- slow enough to look hung, and
+  // each trip was its own chance to hit the PGRST303 bug before cloudCall()
+  // retried it). A handful of batched calls both is faster and, since fewer
+  // requests means fewer chances to land during that bug's window, more
+  // likely to sail through clean.
+  if (state.categories.length) {
+    await cloudCall(() => supabase.from("categories")
+      .upsert(state.categories.map((c, i) => cloudRow(categoryRow(c, i)))));
+  }
+  if (state.funds.length) {
+    await cloudCall(() => supabase.from("funds")
+      .upsert(state.funds.map((f, i) => cloudRow(fundRow(f, i)))));
+    const budgetRows = [];
+    for (const f of state.funds) {
+      for (const b of f.budgets || []) {
+        budgetRows.push(cloudRow({ id: `${f.id}:${b.from}`, fund_id: f.id, from_month: b.from, amount: b.amount }));
+      }
+    }
+    if (budgetRows.length) await cloudCall(() => supabase.from("fund_budgets").insert(budgetRows));
+  }
   for (const batch of chunk(state.ledger, 500)) await syncLedgerEntries(batch);
-  for (const p of state.plans || []) await syncPlan(p);
-  for (const r of state.cashReadings || []) await syncCashReading(r);
-  for (const r of state.cardReadings || []) await syncCardReading(r);
-  for (const o of (state.meta.oneOffs || [])) await syncOneOff(o);
+  if ((state.plans || []).length) {
+    await cloudCall(() => supabase.from("plans").upsert(state.plans.map(p => cloudRow(planRow(p)))));
+  }
+  if ((state.cashReadings || []).length) {
+    await cloudCall(() => supabase.from("cash_readings").upsert(state.cashReadings.map(r => cloudRow(readingRow(r)))));
+  }
+  if ((state.cardReadings || []).length) {
+    await cloudCall(() => supabase.from("card_readings").upsert(state.cardReadings.map(r => cloudRow(readingRow(r)))));
+  }
+  if ((state.meta.oneOffs || []).length) {
+    await cloudCall(() => supabase.from("one_offs").upsert(state.meta.oneOffs.map(o => cloudRow(oneOffRow(o)))));
+  }
   await syncIncomes(state.meta.incomes || []);
   await syncSettings(state.meta.planStart);
   return { error: null };

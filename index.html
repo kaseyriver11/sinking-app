@@ -7602,9 +7602,16 @@ function openMenu() {
  * wrong for a moment. This is what stops a second sign-in on an account
  * that's already synced from re-running the migration over itself.
  */
+const CLOUD_IMPORT_LABEL = "Import your local budget into your account…";
+
+/** Always resets text/disabled too, not just hidden -- reopening the menu
+ *  mid-import (or after one that finished) must never show a stale
+ *  "Importing…" that isn't actually true any more. */
 async function refreshCloudImportBtn() {
   const btn = $("#mCloudImport");
   btn.hidden = true;
+  btn.disabled = false;
+  btn.textContent = CLOUD_IMPORT_LABEL;
   if (!window.CloudSync?.isSignedIn()) return;
   const existing = await window.CloudSync.fetchAppState();
   if (existing) return;   // already has synced data -- don't offer it again
@@ -7620,11 +7627,19 @@ $("#mCloudImport").addEventListener("click", async () => {
   const btn = $("#mCloudImport");
   btn.disabled = true;
   btn.textContent = "Importing…";
-  const { error } = await window.CloudSync.migrateLocalState(state);
-  btn.disabled = false;
-  if (error) { btn.textContent = "Import your local budget into your account…"; alert("Import failed: " + error); return; }
-  btn.hidden = true;
-  alert("Imported. Reload the page to switch this session over to your synced account.");
+  try {
+    const { error } = await window.CloudSync.migrateLocalState(state);
+    if (error) { alert("Import failed: " + error); return; }
+    btn.hidden = true;
+    alert("Imported. Reload the page to switch this session over to your synced account.");
+  } catch (err) {
+    console.error("[import] threw:", err);
+    alert("Import failed: " + err.message);
+  } finally {
+    // whatever happened, the button must never stay stuck on "Importing…"
+    btn.disabled = false;
+    btn.textContent = CLOUD_IMPORT_LABEL;
+  }
 });
 
 hoverTip.bind();
