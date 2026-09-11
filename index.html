@@ -783,6 +783,13 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
         </div>
       </div>
 
+      <div id="fd-auto-wrap" hidden style="margin-bottom:14px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:500">
+          <input id="fd-auto" type="checkbox">
+          <span>Auto-pay <span class="muted">— charged automatically, no manual payment needed</span></span>
+        </label>
+      </div>
+
       <div id="fd-fixed-wrap" hidden>
         <div class="field">
           <label for="fd-dueday">Due day <span class="muted">(optional)</span></label>
@@ -3203,6 +3210,11 @@ function normalize(s) {
       // never resolve a month whose real bill came in under the model; this
       // is the manual override for exactly that case.
       paidMonths: Array.isArray(f.paidMonths) ? f.paidMonths.filter(m => /^\d{4}-\d{2}$/.test(m)) : [],
+      // Purely informational: the bank/card already charges this one on its
+      // own, so the due-now nudge and Mark Paid action (which exist to
+      // prompt YOU to act) don't apply -- only Fixed and Varying carry a
+      // "you might need to pay this" prompt in the first place.
+      auto: (fixed || !!schedule) && !!f.auto,
       note: String(f.note || ""),
       createdAt: f.createdAt || todayStr(),
       archivedAt: f.archivedAt || null,
@@ -5185,6 +5197,14 @@ function renderRail() {
                 data-tip="${escapeHtml(f.name)} — move down" aria-label="Move fund down">▼</button>`
             : `
               ${(() => {
+                // Charged automatically -- there's nothing to manually mark,
+                // so this replaces the pay/paid-tick slot entirely rather
+                // than sitting alongside it.
+                if (f.auto) {
+                  return `<span class="paid-tick" tabindex="0" role="img"
+                    aria-label="Auto-pay — charged automatically, no manual payment needed"
+                    data-tip="Auto-pay — charged automatically, no manual payment needed">⚡</span>`;
+                }
                 const fx = fixedPaid(f);
                 if (fx && fx.due > 0) {
                   return fx.paid
@@ -5469,7 +5489,10 @@ function viewFund(id) {
             </div>` : ""}
           </div>
           <div class="row">
+            ${f.auto ? `<span class="muted" style="font-size:12px;align-self:center">
+              ⚡ Auto-pay</span>` : ""}
             ${(() => {
+              if (f.auto) return "";
               const fx = fixedPaid(f);
               if (!fx || !(fx.due > 0)) return "";
               const dueNote = fx.dueDay
@@ -5490,6 +5513,7 @@ function viewFund(id) {
               // after-state too: Fixed's button turns into a quiet "✓ paid"
               // label rather than just vanishing, so clicking through leaves
               // visible confirmation instead of the row silently going empty.
+              if (f.auto) return "";
               const info = scheduleInfo(f);
               if (!info) return "";
               const dueKey = nextDueKey(f);
@@ -7162,6 +7186,9 @@ function setFundMode(mode) {
   $("#fd-buffer-wrap").hidden = !buf;
   $("#fd-fixed-wrap").hidden = !fix;
   $("#fd-vary-wrap").hidden = mode !== "vary";
+  // Auto-pay only means anything for the two kinds that ever prompt for a
+  // manual payment in the first place (Mark Paid / the due-now nudge).
+  $("#fd-auto-wrap").hidden = !(fix || mode === "vary");
   $("#fd-allot-label").innerHTML = buf
     ? 'Monthly contribution <span class="muted">(optional)</span>'
     : fix ? 'The bill, every month'
@@ -7362,6 +7389,7 @@ function openFund(f = null, catId = null) {
   $("#fd-floor").value = f?.floor || "";
   $("#fd-floor").oninput = fundImpact;
   $("#fd-dueday").value = f?.dueDay || "";
+  $("#fd-auto").checked = !!f?.auto;
   $("#fd-ceiling").value = f?.ceiling || "";
   $("#fd-ceiling").oninput = fundImpact;
   setFundMode(!existing ? (f?.buffer ? "buffer" : f?.fixed ? "fixed" : "level") : "vary");
@@ -7425,6 +7453,7 @@ $("#fundForm").addEventListener("submit", (ev) => {
     fixed: fundMode === "fixed",
     floor: isBuf ? Math.max(0, Number($("#fd-floor").value) || 0) : 0,
     dueDay: fundMode === "fixed" ? Math.max(0, Math.min(31, Math.round(Number($("#fd-dueday").value) || 0))) : 0,
+    auto: (fundMode === "fixed" || fundMode === "vary") && $("#fd-auto").checked,
     ceiling: Math.max(0, Number($("#fd-ceiling").value) || 0),
     target: Math.max(0, Number($("#fd-target").value) || 0),
     targetDate: $("#fd-date").value,

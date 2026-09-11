@@ -135,6 +135,9 @@ create table if not exists funds (
   -- regardless of whether spending that month matched the schedule's
   -- modeled amount -- see index.html's markSchedulePaid()/nextDueKey().
   paid_months jsonb not null default '[]'::jsonb,
+  -- Purely informational: charged automatically, no manual payment needed --
+  -- see index.html's "Auto-pay" fund-editor toggle.
+  auto boolean not null default false,
   note text not null default '',
   sort_order integer not null default 0,   -- same reasoning as categories.sort_order
   archived_at timestamptz,
