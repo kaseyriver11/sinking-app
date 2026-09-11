@@ -791,13 +791,13 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
         <div class="hint">Charged automatically — no manual payment needed.</div>
       </div>
 
-      <div id="fd-fixed-wrap" hidden>
+      <div id="fd-dueday-wrap" hidden>
         <div class="field">
           <label for="fd-dueday">Due day <span class="muted">(optional)</span></label>
           <input id="fd-dueday" type="number" min="1" max="31" step="1" placeholder="1">
-          <div class="hint">The day of the month it's due. Flags it if that day passes and it's
-            still not marked paid. Leave blank if you don't track an exact date — most bills
-            will have one, some won't, and that's fine either way.</div>
+          <div class="hint" id="fd-dueday-hint">The day of the month it's due. Flags it if that day
+            passes and it's still not marked paid. Leave blank if you don't track an exact date —
+            most bills will have one, some won't, and that's fine either way.</div>
         </div>
       </div>
 
@@ -3199,8 +3199,10 @@ function normalize(s) {
       // The day of the month it's due — optional. Most Fixed bills have a real
       // due date, some don't (a subscription you just want reminded about
       // monthly without caring exactly which day) — 0 means "not set", same
-      // convention as floor/ceiling meaning "off".
-      dueDay: fixed ? Math.max(0, Math.min(31, Math.round(Number(f.dueDay) || 0))) : 0,
+      // convention as floor/ceiling meaning "off". A Varying fund can carry
+      // one too (purely informational -- see fixedPaid() for the Fixed-only
+      // overdue flag this also drives).
+      dueDay: (fixed || schedule) ? Math.max(0, Math.min(31, Math.round(Number(f.dueDay) || 0))) : 0,
       floor: buffer ? Math.max(0, Number(f.floor) || 0) : 0,
       // unlike the floor, a ceiling makes sense on every kind of fund
       ceiling: Math.max(0, Number(f.ceiling) || 0),
@@ -5241,8 +5243,11 @@ function renderRail() {
             <div class="sb-sub"><span>${meter.note}</span>${
               meter.due ? `<span class="duetag ${meter.dueTone}">${meter.due}</span>` : ""}</div>` : ""}`;
         const nameBtn = item.querySelector(".sb-name");
-        nameBtn.textContent = (f.auto ? "⚡ " : "") + f.name;
-        nameBtn.title = f.auto ? `${f.name} — Auto-pay, charged automatically` : f.name;
+        const autoPrefix = f.auto ? "⚡" + (f.dueDay ? ordinal(f.dueDay) + " " : " ") : "";
+        nameBtn.textContent = autoPrefix + f.name;
+        nameBtn.title = f.auto
+          ? `${f.name} — Auto-pay${f.dueDay ? `, charged the ${ordinal(f.dueDay)}` : ", charged automatically"}`
+          : f.name;
         const open = () => go({ name: "fund", id: f.id });
         nameBtn.onclick = open;
         item.onclick = (ev) => { if (!ev.target.closest("button")) open(); };
@@ -5488,12 +5493,14 @@ function viewFund(id) {
             </div>` : ""}
           </div>
           <div class="row">
-            ${f.auto ? `<span class="muted" style="font-size:12px;align-self:center" data-tip="The bank/card charges this automatically -- but the ledger still only knows a bill happened once it's logged, so Mark paid still applies">
-              ⚡ Auto-pay</span>` : ""}
+            ${f.auto ? `<span class="muted" style="font-size:12px;align-self:center;white-space:nowrap" data-tip="The bank/card charges this automatically -- but the ledger still only knows a bill happened once it's logged, so Mark paid still applies">
+              ⚡ Auto-pay${f.dueDay ? ` · ${ordinal(f.dueDay)}` : ""}</span>` : ""}
             ${(() => {
               const fx = fixedPaid(f);
               if (!fx || !(fx.due > 0)) return "";
-              const dueNote = fx.dueDay
+              // Auto-pay's own tag above already names the day -- a second
+              // "Due the 12th" badge here would just repeat it.
+              const dueNote = fx.dueDay && !f.auto
                 ? `<span class="duetag ${fx.overdue ? "warning" : "good"}" style="align-self:center;margin-left:6px">${
                     fx.overdue ? "Overdue" : fx.dueToday ? "Due today" : `Due the ${ordinal(fx.dueDay)}`}</span>`
                 : "";
@@ -7181,11 +7188,18 @@ function setFundMode(mode) {
   const buf = mode === "buffer", fix = mode === "fixed";
   $("#fd-level-wrap").hidden = !(mode === "level" || buf || fix);
   $("#fd-buffer-wrap").hidden = !buf;
-  $("#fd-fixed-wrap").hidden = !fix;
   $("#fd-vary-wrap").hidden = mode !== "vary";
   // Auto-pay only means anything for the two kinds that ever prompt for a
   // manual payment in the first place (Mark Paid / the due-now nudge).
   $("#fd-auto-wrap").hidden = !(fix || mode === "vary");
+  // Due day: a Fixed bill's overdue flag already reads this; a Varying bill
+  // has no day-level flagging (its schedule tracks months, not days), so
+  // this is purely informational there -- still worth capturing since a real
+  // bill, auto-paid or not, usually does land on a known day.
+  $("#fd-dueday-wrap").hidden = !(fix || mode === "vary");
+  $("#fd-dueday-hint").textContent = fix
+    ? "The day of the month it's due. Flags it if that day passes and it's still not marked paid. Leave blank if you don't track an exact date — most bills will have one, some won't, and that's fine either way."
+    : "The day of the month it's due (or charged, on auto-pay). Shown next to the fund for reference — Varying bills don't get an overdue flag off it the way Fixed ones do, since the schedule already tracks which month, not which day.";
   $("#fd-allot-label").innerHTML = buf
     ? 'Monthly contribution <span class="muted">(optional)</span>'
     : fix ? 'The bill, every month'
@@ -7449,7 +7463,7 @@ $("#fundForm").addEventListener("submit", (ev) => {
     buffer: isBuf,
     fixed: fundMode === "fixed",
     floor: isBuf ? Math.max(0, Number($("#fd-floor").value) || 0) : 0,
-    dueDay: fundMode === "fixed" ? Math.max(0, Math.min(31, Math.round(Number($("#fd-dueday").value) || 0))) : 0,
+    dueDay: (fundMode === "fixed" || fundMode === "vary") ? Math.max(0, Math.min(31, Math.round(Number($("#fd-dueday").value) || 0))) : 0,
     auto: (fundMode === "fixed" || fundMode === "vary") && $("#fd-auto").checked,
     ceiling: Math.max(0, Number($("#fd-ceiling").value) || 0),
     target: Math.max(0, Number($("#fd-target").value) || 0),
