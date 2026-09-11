@@ -5478,7 +5478,7 @@ function viewFund(id) {
                 : "";
               return (fx.paid
                 ? `<span class="muted" style="font-size:12px;align-self:center">
-                     ✓ ${escapeHtml(monthName(mk))} paid</span>`
+                     ✓ Paid</span>`
                 : `<button class="primary" id="payFixedBtn">✓ Mark paid ${money0(fx.due - fx.spent)}</button>`)
                 + (fx.paid ? "" : dueNote);
             })()}
@@ -5495,7 +5495,7 @@ function viewFund(id) {
               const dueKey = nextDueKey(f);
               if (dueKey > mk) {
                 return `<span class="muted" style="font-size:12px;align-self:center">
-                  ✓ ${escapeHtml(monthName(mk))} paid</span>`;
+                  ✓ Paid</span>`;
               }
               return `<button class="primary" id="markPaidBtn">✓ Mark ${monthLabel(dueKey)} paid</button>`;
             })()}
