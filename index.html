@@ -210,6 +210,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    the third unless the column is told about it */
 .entries.acts3 .c-act { width: 196px; }
 .entries .c-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+/* An inline-editable note cell should read as plain text until touched --
+   full input chrome (border, background, padding) only appears on hover or
+   focus, so a table of them doesn't look like a form. */
+.note-edit { border: 1px solid transparent; background: transparent; padding: 3px 6px;
+  margin: -3px -6px; border-radius: 6px; color: var(--text-primary); width: 100%; }
+.note-edit:hover { background: var(--ghost); }
+.note-edit:focus { background: var(--surface-1); border-color: var(--series-1); outline: none; }
+.note-edit::placeholder { color: var(--text-muted); }
 .entries .c-amt.credit  { color: var(--credit); }
 .entries .c-amt.expense { color: var(--expense); }
 .entries tr.dead td { opacity: .45; text-decoration: line-through; }
@@ -6302,8 +6310,10 @@ function viewMonth(mk) {
                 <td class="num c-amt expense">−${money(Math.abs(e.amount))}</td>
                 <td>${f ? `<button class="linkish" data-goexp="${f.id}">${escapeHtml(f.name)}</button>
                   <span class="muted" style="font-size:11px"> · ${escapeHtml(cat ? cat.name : "")}</span>` : "—"}</td>
-                <td class="c-note muted">${escapeHtml(e.note || "—")}${
-                  e.splitId ? ` <span class="tag" data-tip="${escapeHtml(splitTip(e))}">split</span>` : ""}</td>
+                <td class="c-note">
+                  <input class="note-edit" data-editnote="${e.id}" value="${escapeHtml(e.note || "")}" placeholder="What was it for?">
+                  ${e.splitId ? `<span class="tag" data-tip="${escapeHtml(splitTip(e))}">split</span>` : ""}
+                </td>
               </tr>`;
             }).join("")}</tbody></table></div>
         </section>`;
@@ -6319,6 +6329,16 @@ function viewMonth(mk) {
   $("#mExpense").onclick = () => openEntry(null, -1, mk);
   $$("[data-goover]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goover }));
   $$("[data-goexp]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goexp }));
+  $$("[data-editnote]").forEach(inp => {
+    const commit = () => {
+      const entry = state.ledger.find(x => x.id === inp.dataset.editnote);
+      const val = inp.value.trim();
+      if (!entry || val === (entry.note || "")) return;   // no-op, nothing actually changed
+      editEntry(entry.id, { note: val });
+    };
+    inp.addEventListener("blur", commit);
+    inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); } });
+  });
   $$("[data-rebudget]").forEach(b => b.onclick = () => {
     const f = fundById(b.dataset.rebudget), amt = Number(b.dataset.amt);
     const was = budgetOfFund(f);
