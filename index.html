@@ -2930,13 +2930,21 @@ function readMirror() {
 let saveTimer = null;
 function save() {
   clearDerivedCache();
-  mirrorLocal();
+  // Cloud mode's persistence is the cloud tables, full stop -- mirroring to
+  // localStorage here as well used to create a false safety net: an edit
+  // that failed to reach the cloud (the store-column migration gap that
+  // prompted this) still looked saved in this tab, right up until the next
+  // load re-fetched the real cloud state and quietly dropped it. Local file
+  // mode is unaffected -- its mirror is still the crash net documented in
+  // CLAUDE.md's "Durability layers".
+  if (!cloudActive) mirrorLocal();
   render();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 250);
 }
 
 async function persist() {
+  if (cloudActive) return;   // cloud mode never uses the local file/mirror path
   if (!dirHandle) { setSync("local", "Saved in browser only"); return; }
   try {
     if (!(await hasPermission(dirHandle, false))) { setSync("needs-permission", "Permission needed"); return; }
@@ -3292,10 +3300,11 @@ async function boot() {
  * in with nothing synced yet from blanking out whatever's currently loaded.
  *
  * dirHandle is cleared because cloud mode is this session's persistence
- * target now -- the local file isn't written to while signed in. Actual
- * cloud writes aren't wired yet (that's Phase 4); until then this is
- * read-only, and any edit made while signed in only reaches the localStorage
- * mirror, same as normal disconnected-folder behavior.
+ * target now -- the local file isn't written to while signed in, and (see
+ * save()/persist() below) neither is the localStorage mirror. Every mutation
+ * writes straight to the cloud tables; a failed write surfaces as a visible
+ * error on the sync pill rather than silently landing in a local cache that
+ * disappears the moment the real cloud state is re-fetched.
  */
 function loadCloudState(raw) {
   cloudActive = true;
@@ -3311,6 +3320,26 @@ function loadCloudState(raw) {
  *  two copies of the same decision that could drift apart. */
 function exitCloudMode() {
   location.reload();
+}
+
+/**
+ * Called by auth.js's cloudCall() after every single cloud write, success or
+ * failure -- the one place that can tell whether what's on screen actually
+ * made it to the database. Cloud writes are still fire-and-forget (no dialog
+ * blocks on them), but a failure now can't hide: it pins the sync pill to a
+ * visible error instead of leaving whatever text happened to be there, which
+ * is exactly the gap that let a schema mismatch (a column the ledger table
+ * didn't have yet) look saved right up until the next reload silently
+ * dropped the data. Doesn't auto-clear on its own -- only a subsequent
+ * successful write, or a fresh load, moves the pill off "error".
+ */
+function onCloudSyncError(msg) {
+  if (!cloudActive) return;
+  setSync("error", "Not saved to your account — " + msg);
+}
+function onCloudSyncOk() {
+  if (!cloudActive) return;
+  setSync("saved", "Synced to your account");
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

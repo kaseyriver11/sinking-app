@@ -193,9 +193,15 @@ async function cloudCall(fn) {
   if (!configured || !currentSession) return;
   try {
     const { error } = await withRetry(fn);
-    if (error) console.error("[CloudSync] write failed:", error.message);
+    if (error) {
+      console.error("[CloudSync] write failed:", error.message);
+      window.onCloudSyncError?.(error.message);
+    } else {
+      window.onCloudSyncOk?.();
+    }
   } catch (err) {
     console.error("[CloudSync] write threw:", err.message);
+    window.onCloudSyncError?.(err.message);
   }
 }
 
