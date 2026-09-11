@@ -5198,14 +5198,12 @@ function renderRail() {
                 data-tip="${escapeHtml(f.name)} — move down" aria-label="Move fund down">▼</button>`
             : `
               ${(() => {
-                // Charged automatically -- there's nothing to manually mark,
-                // so this replaces the pay/paid-tick slot entirely rather
-                // than sitting alongside it.
-                if (f.auto) {
-                  return `<span class="paid-tick" tabindex="0" role="img"
-                    aria-label="Auto-pay — charged automatically, no manual payment needed"
-                    data-tip="Auto-pay — charged automatically, no manual payment needed">⚡</span>`;
-                }
+                // Auto-pay is about the METHOD (the bank/card charges it on
+                // its own); paid/unpaid is about whether the ledger reflects
+                // that charge yet -- two different questions, so auto-pay
+                // gets its own spot next to the name (below) rather than
+                // replacing this one. Without a bank feed, the app still
+                // only knows a bill happened once it's logged, autopay or not.
                 const fx = fixedPaid(f);
                 if (fx && fx.due > 0) {
                   return fx.paid
@@ -5243,8 +5241,8 @@ function renderRail() {
             <div class="sb-sub"><span>${meter.note}</span>${
               meter.due ? `<span class="duetag ${meter.dueTone}">${meter.due}</span>` : ""}</div>` : ""}`;
         const nameBtn = item.querySelector(".sb-name");
-        nameBtn.textContent = f.name;
-        nameBtn.title = f.name;
+        nameBtn.textContent = (f.auto ? "⚡ " : "") + f.name;
+        nameBtn.title = f.auto ? `${f.name} — Auto-pay, charged automatically` : f.name;
         const open = () => go({ name: "fund", id: f.id });
         nameBtn.onclick = open;
         item.onclick = (ev) => { if (!ev.target.closest("button")) open(); };
@@ -5490,10 +5488,9 @@ function viewFund(id) {
             </div>` : ""}
           </div>
           <div class="row">
-            ${f.auto ? `<span class="muted" style="font-size:12px;align-self:center">
+            ${f.auto ? `<span class="muted" style="font-size:12px;align-self:center" data-tip="The bank/card charges this automatically -- but the ledger still only knows a bill happened once it's logged, so Mark paid still applies">
               ⚡ Auto-pay</span>` : ""}
             ${(() => {
-              if (f.auto) return "";
               const fx = fixedPaid(f);
               if (!fx || !(fx.due > 0)) return "";
               const dueNote = fx.dueDay
@@ -5514,7 +5511,6 @@ function viewFund(id) {
               // after-state too: Fixed's button turns into a quiet "✓ paid"
               // label rather than just vanishing, so clicking through leaves
               // visible confirmation instead of the row silently going empty.
-              if (f.auto) return "";
               const info = scheduleInfo(f);
               if (!info) return "";
               const dueKey = nextDueKey(f);
