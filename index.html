@@ -221,6 +221,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .expense-row { cursor: pointer; }
 .expense-row:hover { background: var(--ghost); }
 .expense-row:hover .note-edit:hover { background: var(--surface-1); }
+.c-store { width: 130px; }
+.c-store-inner { display: flex; align-items: center; gap: 5px; }
+.c-store-inner .note-edit { width: auto; flex: 1; }
+.store-icon { flex: none; font-size: 14px; width: 16px; text-align: center; }
 .entries .c-amt.credit  { color: var(--credit); }
 .entries .c-amt.expense { color: var(--expense); }
 .entries tr.dead td { opacity: .45; text-decoration: line-through; }
@@ -962,6 +966,8 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
   </form>
 </dialog>
 
+<datalist id="storeList"></datalist>
+
 <dialog id="entryDlg">
   <form method="dialog" id="entryForm">
     <div class="dlg-body">
@@ -986,6 +992,10 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
           <label for="e-date">Date</label>
           <input id="e-date" type="date" required>
         </div>
+      </div>
+      <div class="field" id="e-store-field" hidden>
+        <label for="e-store">Store <span class="muted">(optional)</span></label>
+        <input id="e-store" maxlength="60" list="storeList" placeholder="Target, Costco, …">
       </div>
       <div class="field" style="margin-bottom:0">
         <label for="e-note">Note <span class="muted">(optional)</span></label>
@@ -1041,9 +1051,15 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
           <input id="sp-date" type="date" required>
         </div>
       </div>
-      <div class="field">
-        <label for="sp-note">Note <span class="muted">(optional)</span></label>
-        <input id="sp-note" maxlength="120" placeholder="What was it?">
+      <div class="field-row">
+        <div class="field">
+          <label for="sp-note">Note <span class="muted">(optional)</span></label>
+          <input id="sp-note" maxlength="120" placeholder="What was it?">
+        </div>
+        <div class="field">
+          <label for="sp-store">Store <span class="muted">(optional)</span></label>
+          <input id="sp-store" maxlength="60" list="storeList" placeholder="Target, Costco, …">
+        </div>
       </div>
       <datalist id="splitFundList"></datalist>
       <div id="sp-rows"></div>
@@ -1362,6 +1378,35 @@ const EMOJI_GROUPS = [
 const EMOJI = EMOJI_GROUPS.flatMap(g => g[1]).map(e => e.split(" ")[0]);
 const DEFAULT_ICON = "💰";
 
+/**
+ * Store name -> a recognizable emoji, so "Target" in the store field shows
+ * something bullseye-ish without embedding an actual trademarked logo image
+ * — the same reasoning behind every other icon in this app already being a
+ * plain emoji, not real brand art. Matched case-insensitively, and only on
+ * a name that starts with the key (so "Target" and "Target.com" both hit,
+ * a store called "Target Range Supply" doesn't get a false match it can't
+ * un-mean). Unrecognized stores just show as plain text — no icon is not
+ * an error, it just means this list doesn't know that one yet.
+ */
+const STORE_ICONS = {
+  "target": "🎯", "walmart": "🛒", "costco": "🏬", "sam's club": "🏬",
+  "amazon": "📦", "kroger": "🛒", "publix": "🛒", "whole foods": "🥑",
+  "trader joe's": "🌴", "aldi": "🛒", "safeway": "🛒",
+  "home depot": "🔨", "lowe's": "🔧", "ikea": "🛋️",
+  "starbucks": "☕", "mcdonald's": "🍔", "chick-fil-a": "🐔",
+  "cvs": "💊", "walgreens": "💊",
+  "shell": "⛽", "chevron": "⛽", "exxon": "⛽", "bp": "⛽",
+  "best buy": "🔌", "apple": "🍎", "gamestop": "🎮",
+  "petco": "🐾", "petsmart": "🐾",
+  "dsw": "👟", "old navy": "👕", "gap": "👕", "tj maxx": "🏷️", "marshalls": "🏷️",
+};
+function storeIcon(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (!n) return "";
+  const hit = Object.keys(STORE_ICONS).find(k => n.startsWith(k));
+  return hit ? STORE_ICONS[hit] : "";
+}
+
 const blankState = () => ({
   schemaVersion: SCHEMA_VERSION,
   // cashReserves is what's actually in the bank. Allocated is the sum of every
@@ -1413,6 +1458,15 @@ const unallocated = () => cashNow() - allocated() - cardNow();
 
 let state = blankState();
 let dirHandle = null;
+// Set the instant loadCloudState() runs. boot()'s local-file path and
+// auth.js's cloud-load path are two independent async chains that both
+// kick off on every page load with no coordination between them -- without
+// this flag, whichever one happened to resolve LAST would silently win,
+// including a stale local file clobbering an already-loaded cloud session
+// back to local data and the wrong sync-pill text. Cloud winning over local
+// is the correct, intended direction (that's the whole point of signing
+// in) and needs no guard; this only stops the wrong direction.
+let cloudActive = false;
 let route = { name: "overview", id: null };
 let range = "all";
 /*
@@ -3090,6 +3144,7 @@ function normalize(s) {
     amount: Number(e.amount) || 0,
     date: e.date || todayStr(),
     note: String(e.note || ""),
+    store: String(e.store || ""),
     kind: ["allotment", "transfer"].includes(e.kind) ? e.kind : null,
     pairId: e.pairId || null,
     splitId: e.splitId || null,
@@ -3132,8 +3187,12 @@ function mergeStates(base, newer) {
   };
 }
 
-async function loadFromDir(handle, { request = false } = {}) {
+async function loadFromDir(handle, { request = false, auto = false } = {}) {
   if (!(await hasPermission(handle, request))) { setSync("needs-permission", "Permission needed"); return false; }
+  // Only matters for boot()'s automatic call -- an explicit "Choose data
+  // folder…"/"Reconnect" click is deliberate user intent and always wins,
+  // signed in or not.
+  if (auto && cloudActive) return false;
   const dataDir = await handle.getDirectoryHandle("data", { create: true });
   const fh = await dataDir.getFileHandle("funds.json", { create: true });
   const text = (await (await fh.getFile()).text()).trim();
@@ -3155,6 +3214,10 @@ async function loadFromDir(handle, { request = false } = {}) {
       return false;
     }
   }
+
+  // re-checked here, not just at the top -- everything above this point was
+  // itself a string of awaits cloud could have resolved during
+  if (auto && cloudActive) return false;
 
   const onDisk = text ? JSON.parse(text) : null;
   const mirror = readMirror();
@@ -3211,8 +3274,11 @@ async function boot() {
   let handle = null;
   try { handle = await idb.get("dir"); } catch (_) {}
   if (!handle) { setSync("local", mirror ? "Saved in browser only" : "Choose a data folder"); return; }
+  if (cloudActive) return;   // cloud already won while awaiting idb.get() above
   dirHandle = handle;
-  if (await hasPermission(handle, false)) await loadFromDir(handle);
+  const has = await hasPermission(handle, false);
+  if (cloudActive) return;   // ...or during that await
+  if (has) await loadFromDir(handle, { auto: true });
   else setSync("needs-permission", "Reconnect " + handle.name);
 }
 
@@ -3232,6 +3298,7 @@ async function boot() {
  * mirror, same as normal disconnected-folder behavior.
  */
 function loadCloudState(raw) {
+  cloudActive = true;
   state = normalize(raw);
   dirHandle = null;
   clearDerivedCache();
@@ -3331,10 +3398,10 @@ function moveFund(id, dir) {
 
 /* ── ledger entries ──────────────────────────────────────────────────────── */
 
-function addEntry(fundId, amount, date, note, kind = null) {
+function addEntry(fundId, amount, date, note, kind = null, store = "") {
   clearDerivedCache();
   const now = new Date().toISOString();
-  const e = { id: uid(), fundId, amount, date, note, kind, createdAt: now, updatedAt: now };
+  const e = { id: uid(), fundId, amount, date, note, kind, store, createdAt: now, updatedAt: now };
   state.ledger.push(e);
   save();
   window.CloudSync?.syncLedgerEntry(e);
@@ -3438,12 +3505,12 @@ function deleteTransfer(pairId) {
  * several same-day entries, and per-leg duplicate-checking would misfire on
  * legitimate same-amount lines.
  */
-function addSplitExpense(parts, date, note) {
+function addSplitExpense(parts, date, note, store = "") {
   clearDerivedCache();
   const now = new Date().toISOString();
   const splitId = uid();
   const entries = parts.map(p => ({ id: uid(), fundId: p.fundId, amount: -Math.abs(p.amt), date, note,
-    kind: null, splitId, createdAt: now, updatedAt: now }));
+    store, kind: null, splitId, createdAt: now, updatedAt: now }));
   state.ledger.push(...entries);
   save();
   window.CloudSync?.syncLedgerEntries(entries);
@@ -6305,7 +6372,7 @@ function viewMonth(mk) {
           </div>
           <div class="scroll"><table class="entries">
             <thead><tr><th class="c-date">Date</th><th class="num c-amt">Amount</th>
-              <th>Fund</th><th>Note</th></tr></thead>
+              <th>Fund</th><th>Store</th><th>Note</th></tr></thead>
             <tbody>${expenses.map(e => {
               const f = fundById(e.fundId), cat = f && catById(f.categoryId);
               return `<tr class="expense-row" data-openrow="${e.id}" data-fund="${f ? f.id : ""}">
@@ -6313,6 +6380,11 @@ function viewMonth(mk) {
                 <td class="num c-amt expense">−${money(Math.abs(e.amount))}</td>
                 <td>${f ? `${escapeHtml(f.name)}
                   <span class="muted" style="font-size:11px"> · ${escapeHtml(cat ? cat.name : "")}</span>` : "—"}</td>
+                <td class="c-store"><div class="c-store-inner">
+                  <span class="store-icon" data-storeicon="${e.id}">${storeIcon(e.store)}</span>
+                  <input class="note-edit" data-editstore="${e.id}" value="${escapeHtml(e.store || "")}"
+                    placeholder="—" list="storeList">
+                </div></td>
                 <td class="c-note">
                   <input class="note-edit" data-editnote="${e.id}" value="${escapeHtml(e.note || "")}" placeholder="What was it for?">
                   ${e.splitId ? `<span class="tag" data-tip="${escapeHtml(splitTip(e))}">split</span>` : ""}
@@ -6350,6 +6422,19 @@ function viewMonth(mk) {
     inp.addEventListener("blur", commit);
     inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); } });
   });
+  $$("[data-editstore]").forEach(inp => {
+    const icon = $(`[data-storeicon="${inp.dataset.editstore}"]`);
+    inp.addEventListener("input", () => { if (icon) icon.textContent = storeIcon(inp.value); });
+    const commit = () => {
+      const entry = state.ledger.find(x => x.id === inp.dataset.editstore);
+      const val = inp.value.trim();
+      if (!entry || val === (entry.store || "")) return;   // no-op, nothing actually changed
+      editEntry(entry.id, { store: val });
+    };
+    inp.addEventListener("blur", commit);
+    inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); } });
+  });
+  refreshStoreList();
   $$("[data-rebudget]").forEach(b => b.onclick = () => {
     const f = fundById(b.dataset.rebudget), amt = Number(b.dataset.amt);
     const was = budgetOfFund(f);
@@ -7169,6 +7254,7 @@ function openEditEntry(entryId) {
   $("#e-amount").value = Math.abs(e.amount);
   $("#e-date").value = e.date;
   $("#e-note").value = e.note || "";
+  $("#e-store").value = e.store || "";
 }
 
 /**
@@ -7196,12 +7282,22 @@ function openEntry(f, sign, mk = thisMonth()) {
   $("#e-amount").value = "";
   $("#e-date").value = mk === thisMonth() ? todayStr() : mk + "-01";
   $("#e-note").value = "";
+  $("#e-store").value = "";
   $("#entrySave").textContent = sign > 0 ? "Add budget" : "Add expense";
-  // splitting only makes sense for an expense — a budget credit has nothing to divide
+  // splitting and a store both only make sense for an expense — a budget
+  // credit has nothing to divide and isn't "from" anywhere
   $("#e-split-btn").hidden = sign > 0;
+  $("#e-store-field").hidden = sign > 0;
+  refreshStoreList();
   refreshEntrySub();
   $("#entryDlg").showModal();
   setTimeout(() => $("#e-amount").focus(), 30);
+}
+
+/** every distinct store already used, so the datalist offers what you'd expect to type */
+function refreshStoreList() {
+  const names = [...new Set(state.ledger.map(e => e.store).filter(Boolean))].sort();
+  $("#storeList").innerHTML = names.map(n => `<option value="${escapeHtml(n)}">`).join("");
 }
 
 function refreshEntrySub() {
@@ -7224,9 +7320,10 @@ $("#entryForm").addEventListener("submit", (ev) => {
   if (!(amt > 0) || !fundById(fid)) { ev.preventDefault(); return; }
   const signed = amt * entryCtx.sign;
   const date = $("#e-date").value, note = $("#e-note").value.trim();
+  const store = entryCtx.sign < 0 ? $("#e-store").value.trim() : "";
   if (!confirmDuplicate(fid, signed, date, entryCtx.editing)) { ev.preventDefault(); return; }
-  if (entryCtx.editing) editEntry(entryCtx.editing, { fundId: fid, amount: signed, date, note });
-  else addEntry(fid, signed, date, note);
+  if (entryCtx.editing) editEntry(entryCtx.editing, { fundId: fid, amount: signed, date, note, store });
+  else addEntry(fid, signed, date, note, null, store);
 });
 
 /** hands off whatever's already typed in Add expense to the split dialog */
@@ -7363,6 +7460,8 @@ function openSplit(mk = thisMonth(), prefill = {}) {
   $("#sp-total").value = prefill.amount > 0 ? prefill.amount : "";
   $("#sp-date").value = prefill.date || (mk === thisMonth() ? todayStr() : mk + "-01");
   $("#sp-note").value = prefill.note || "";
+  $("#sp-store").value = "";
+  refreshStoreList();
   $("#sp-rows").innerHTML = "";
   addSplitRow();
   addSplitRow();
@@ -7434,8 +7533,8 @@ $("#splitForm").addEventListener("submit", (ev) => {
   if (ev.submitter?.value !== "save") return;
   const b = buildSplitParts();
   if (!b.ok) { ev.preventDefault(); return; }
-  const date = $("#sp-date").value, note = $("#sp-note").value.trim();
-  const splitId = addSplitExpense(b.parts, date, note);
+  const date = $("#sp-date").value, note = $("#sp-note").value.trim(), store = $("#sp-store").value.trim();
+  const splitId = addSplitExpense(b.parts, date, note, store);
   toast(`Added ${money0(b.total)} split across ${b.parts.length} funds`,
         () => deleteSplitGroup(splitId));
 });

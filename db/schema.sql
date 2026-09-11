@@ -185,6 +185,7 @@ create table if not exists ledger (
   amount numeric(12,2) not null,
   date date not null,
   note text not null default '',
+  store text not null default '',
   kind text check (kind in ('allotment', 'transfer')),
   pair_id text,
   split_id text,

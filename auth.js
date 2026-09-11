@@ -165,7 +165,7 @@ async function fetchAppState() {
     })),
     ledger: (ledger.data || []).map(e => ({
       id: e.id, fundId: e.fund_id, amount: Number(e.amount), date: e.date, note: e.note || "",
-      kind: e.kind, pairId: e.pair_id, splitId: e.split_id,
+      store: e.store || "", kind: e.kind, pairId: e.pair_id, splitId: e.split_id,
       createdAt: e.created_at, updatedAt: e.updated_at,
     })),
     plans: (plans.data || []).map(p => ({
@@ -216,7 +216,7 @@ function fundRow(f, index) {
 }
 function ledgerRow(e) {
   return { id: e.id, fund_id: e.fundId, amount: e.amount, date: e.date, note: e.note || "",
-    kind: e.kind || null, pair_id: e.pairId || null, split_id: e.splitId || null,
+    store: e.store || "", kind: e.kind || null, pair_id: e.pairId || null, split_id: e.splitId || null,
     created_at: e.createdAt || null, updated_at: e.updatedAt || null };
 }
 function readingRow(r) {
