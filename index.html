@@ -5186,13 +5186,28 @@ function renderRail() {
             : `
               ${(() => {
                 const fx = fixedPaid(f);
-                if (!fx || !(fx.due > 0)) return "";
-                return fx.paid
+                if (fx && fx.due > 0) {
+                  return fx.paid
+                    ? `<span class="paid-tick" tabindex="0" role="img"
+                         aria-label="${escapeHtml(monthName(thisMonth()))} bill already paid"
+                         data-tip="${escapeHtml(monthName(thisMonth()))} bill already paid">✓</span>`
+                    : `<button class="iconbtn pay" data-paynow
+                         data-tip="Mark bill as paid&#10;Records ${money0(fx.due - fx.spent)} against ${escapeHtml(f.name)}"
+                         aria-label="Mark ${escapeHtml(f.name)} bill as paid">✓</button>`;
+                }
+                // Same one-click ✓ for a Varying fund, right where Fixed's
+                // lives -- only shown when this month actually has a bill
+                // (isDue), same restraint as the "Due now" badge elsewhere.
+                // No amount recorded, unlike Fixed's -- see markSchedulePaid.
+                const info = scheduleInfo(f);
+                if (!info || !info.isDue(thisMonth())) return "";
+                const dueKey = nextDueKey(f);
+                return dueKey > thisMonth()
                   ? `<span class="paid-tick" tabindex="0" role="img"
                        aria-label="${escapeHtml(monthName(thisMonth()))} bill already paid"
                        data-tip="${escapeHtml(monthName(thisMonth()))} bill already paid">✓</span>`
-                  : `<button class="iconbtn pay" data-paynow
-                       data-tip="Mark bill as paid&#10;Records ${money0(fx.due - fx.spent)} against ${escapeHtml(f.name)}"
+                  : `<button class="iconbtn pay" data-varypay
+                       data-tip="Mark bill as paid&#10;No amount recorded — just closes out ${escapeHtml(monthName(thisMonth()))} for ${escapeHtml(f.name)}"
                        aria-label="Mark ${escapeHtml(f.name)} bill as paid">✓</button>`;
               })()}
               <button class="iconbtn plus" data-quick="credit"
@@ -5224,6 +5239,12 @@ function renderRail() {
             if (!amt) return;
             const added = state.ledger[state.ledger.length - 1];
             toast(`${f.name} marked paid · ${money(amt)}`, () => deleteEntry(added.id));
+          };
+          const varypay = item.querySelector("[data-varypay]");
+          if (varypay) varypay.onclick = () => {
+            const dueKey = nextDueKey(f);
+            markSchedulePaid(f.id, dueKey);
+            toast(`${f.name} — ${monthLabel(dueKey)} marked paid`, () => unmarkSchedulePaid(f.id, dueKey));
           };
         }
         return item;
