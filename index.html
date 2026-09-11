@@ -2758,6 +2758,14 @@ function cycleOutlook(f) {
 /**
  * The next payment that hasn't been made yet. A due month already paid is
  * skipped, so the moment you pay September the answer becomes the next one.
+ *
+ * "Paid" is normally inferred by comparing spending to the schedule's own
+ * modeled amount for that month -- but a real bill routinely differs from
+ * that model (that's the whole point of a smoothing curve), and the ledger
+ * alone can't tell "the real bill was smaller than modeled" apart from "only
+ * a partial payment was made" -- both just look like spending < modeled.
+ * f.paidMonths is the manual override for the first case: explicitly marking
+ * a month paid (see markSchedulePaid) settles it regardless of amount.
  */
 function nextDueKey(f) {
   const info = scheduleInfo(f);
@@ -2765,12 +2773,42 @@ function nextDueKey(f) {
   let m = horizonStart();
   for (let i = 0; i < 13; i++) {
     if (info.isDue(m)) {
-      const paid = monthStats({ fund: f.id }, m).spent >= info.amountFor(m) - 0.01;
+      const paid = monthStats({ fund: f.id }, m).spent >= info.amountFor(m) - 0.01
+        || (f.paidMonths || []).includes(m);
       if (!paid) return m;
     }
     m = monthShift(m, 1);
   }
   return m;
+}
+
+/**
+ * Explicit "yes, this month's bill is done" for a Varying fund, independent
+ * of whether spending happened to match the schedule's modeled amount.
+ * Mirrors payFixed()'s one-click acknowledgment, but can't just add the
+ * remainder as an expense the way payFixed does -- a Fixed bill has one
+ * known amount, so "the remainder" is well-defined; a Varying month's real
+ * bill is whatever it was, and fabricating an entry for the gap between
+ * that and the model would misstate actual spending. Idempotent.
+ */
+function markSchedulePaid(fundId, mk) {
+  const f = fundById(fundId);
+  if (!f || !scheduleInfo(f)) return;
+  if (!(f.paidMonths || []).includes(mk)) {
+    f.paidMonths = [...(f.paidMonths || []), mk];
+    clearDerivedCache();
+    save();
+    window.CloudSync?.syncFund(f, state.funds.indexOf(f));
+  }
+}
+/** The toast-undo counterpart -- see markSchedulePaid. */
+function unmarkSchedulePaid(fundId, mk) {
+  const f = fundById(fundId);
+  if (!f) return;
+  f.paidMonths = (f.paidMonths || []).filter(m => m !== mk);
+  clearDerivedCache();
+  save();
+  window.CloudSync?.syncFund(f, state.funds.indexOf(f));
 }
 
 /**
@@ -3147,6 +3185,13 @@ function normalize(s) {
       floor: buffer ? Math.max(0, Number(f.floor) || 0) : 0,
       // unlike the floor, a ceiling makes sense on every kind of fund
       ceiling: Math.max(0, Number(f.ceiling) || 0),
+      // Months ('YYYY-MM') a Varying fund's due bill was explicitly marked
+      // paid regardless of whether spending that month matched the schedule's
+      // modeled amount -- see nextDueKey(). A real bill routinely differs
+      // from the smoothing curve, so "spent >= modeled amount" alone can
+      // never resolve a month whose real bill came in under the model; this
+      // is the manual override for exactly that case.
+      paidMonths: Array.isArray(f.paidMonths) ? f.paidMonths.filter(m => /^\d{4}-\d{2}$/.test(m)) : [],
       note: String(f.note || ""),
       createdAt: f.createdAt || todayStr(),
       archivedAt: f.archivedAt || null,
@@ -3403,8 +3448,19 @@ function onCloudSyncError(msg) {
   if (!cloudActive) return;
   setSync("error", "Not saved to your account — " + msg);
 }
+/**
+ * Deliberately does NOT clear an existing error. Several mutations fire more
+ * than one cloud write in sequence (syncFund writes the fund row, then
+ * deletes and re-inserts its budget rows) -- an earlier failure followed by
+ * a later, unrelated success used to flip the pill straight back to "saved"
+ * and erase the only sign anything had gone wrong (exactly how the ledger
+ * store-column gap first went unnoticed). An error now stays up until it's
+ * explicitly acknowledged -- see the sync pill's click handler -- or a fresh
+ * page load re-establishes ground truth.
+ */
 function onCloudSyncOk() {
   if (!cloudActive) return;
+  if ($("#syncBtn").dataset.state === "error") return;
   setSync("saved", "Synced to your account");
 }
 
@@ -5463,6 +5519,11 @@ function viewFund(id) {
             <div class="proj-verdict">${short
               ? `${ICONS.warning} <strong>${money(pr.shortfall)} short</strong> for this one.`
               : `${ICONS.good} <strong>Covered.</strong> ${monthLabel(pr.dueKey, true)}'s bill will clear.`}</div>
+            ${short ? `<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <button class="ghost sm" id="markPaidBtn">✓ Mark ${monthLabel(pr.dueKey)} paid</button>
+              <span class="muted" style="font-size:11px">if the real bill came in under the
+                ${money0(pr.amount)} modeled here and it's already settled</span>
+            </div>` : ""}
           </div>
 
           ${(() => {
@@ -5675,6 +5736,11 @@ function viewFund(id) {
     if (!amt) return;
     const added = state.ledger[state.ledger.length - 1];
     toast(`${f.name} marked paid · ${money(amt)}`, () => deleteEntry(added.id));
+  };
+  if ($("#markPaidBtn")) $("#markPaidBtn").onclick = () => {
+    const mk = projection(f).dueKey;
+    markSchedulePaid(id, mk);
+    toast(`${f.name} — ${monthLabel(mk)} marked paid`, () => unmarkSchedulePaid(id, mk));
   };
   if ($("#releaseBtn")) $("#releaseBtn").onclick = () => confirmRelease(id);
   if ($("#catchUpBufBtn")) $("#catchUpBufBtn").onclick = () => {
@@ -7917,8 +7983,28 @@ $("#overviewBtn").addEventListener("click", () => go({ name: "overview" }));
 $("#monthBtn").addEventListener("click", () => go({ name: "month", id: thisMonth() }));
 $("#allFundsBtn").addEventListener("click", () => go({ name: "allfunds" }));
 $("#syncBtn").addEventListener("click", () => {
-  if ($("#syncBtn").dataset.state === "needs-permission") reconnect(); else openMenu();
+  const st = $("#syncBtn").dataset.state;
+  if (st === "needs-permission") reconnect();
+  else if (cloudActive && st === "error") recheckCloudSync();
+  else openMenu();
 });
+
+/**
+ * Re-verifies against the cloud rather than just dismissing the error --
+ * clicking through a real failure without checking is how a stale "saved"
+ * pill happens again. Re-fetches this account's data fresh; if it comes
+ * back at all, the connection itself is fine, so whatever specific write
+ * failed is treated as acknowledged and the pill clears. (The most likely
+ * cause -- a schema mismatch like a column the database doesn't have yet --
+ * isn't something a refetch can detect either way; this just confirms the
+ * account is reachable and moves the pill out of its stuck state.)
+ */
+async function recheckCloudSync() {
+  setSync("saving", "Checking…");
+  const raw = await window.CloudSync?.fetchAppState();
+  if (raw) setSync("saved", "Synced to your account");
+  else setSync("error", "Still couldn't reach your account");
+}
 $("#reconnectBtn").addEventListener("click", reconnect);
 $("#mConnect").addEventListener("click", () => { $("#menuDlg").close(); connectFolder(); });
 

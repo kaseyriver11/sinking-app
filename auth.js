@@ -161,6 +161,7 @@ async function fetchAppState() {
       schedule: f.schedule_amounts ? { amounts: f.schedule_amounts } : null,
       buffer: f.buffer, fixed: f.fixed, dueDay: f.due_day || 0,
       floor: Number(f.floor) || 0, ceiling: Number(f.ceiling) || 0,
+      paidMonths: f.paid_months || [],
       note: f.note || "", createdAt: f.created_at, archivedAt: f.archived_at,
     })),
     ledger: (ledger.data || []).map(e => ({
@@ -217,7 +218,7 @@ function fundRow(f, index) {
     target: f.target || 0, target_date: f.targetDate || null,
     schedule_amounts: f.schedule ? f.schedule.amounts : null,
     buffer: !!f.buffer, floor: f.floor || 0, fixed: !!f.fixed, due_day: f.dueDay || 0,
-    ceiling: f.ceiling || 0, note: f.note || "", sort_order: index || 0,
+    ceiling: f.ceiling || 0, paid_months: f.paidMonths || [], note: f.note || "", sort_order: index || 0,
     archived_at: f.archivedAt || null, created_at: f.createdAt || null };
 }
 function ledgerRow(e) {
