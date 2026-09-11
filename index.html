@@ -218,6 +218,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .note-edit:hover { background: var(--ghost); }
 .note-edit:focus { background: var(--surface-1); border-color: var(--series-1); outline: none; }
 .note-edit::placeholder { color: var(--text-muted); }
+.expense-row { cursor: pointer; }
+.expense-row:hover { background: var(--ghost); }
+.expense-row:hover .note-edit:hover { background: var(--surface-1); }
 .entries .c-amt.credit  { color: var(--credit); }
 .entries .c-amt.expense { color: var(--expense); }
 .entries tr.dead td { opacity: .45; text-decoration: line-through; }
@@ -6305,10 +6308,10 @@ function viewMonth(mk) {
               <th>Fund</th><th>Note</th></tr></thead>
             <tbody>${expenses.map(e => {
               const f = fundById(e.fundId), cat = f && catById(f.categoryId);
-              return `<tr>
+              return `<tr class="expense-row" data-openrow="${e.id}" data-fund="${f ? f.id : ""}">
                 <td class="c-date">${fmtEntryDay(e.date)}</td>
                 <td class="num c-amt expense">−${money(Math.abs(e.amount))}</td>
-                <td>${f ? `<button class="linkish" data-goexp="${f.id}">${escapeHtml(f.name)}</button>
+                <td>${f ? `${escapeHtml(f.name)}
                   <span class="muted" style="font-size:11px"> · ${escapeHtml(cat ? cat.name : "")}</span>` : "—"}</td>
                 <td class="c-note">
                   <input class="note-edit" data-editnote="${e.id}" value="${escapeHtml(e.note || "")}" placeholder="What was it for?">
@@ -6328,7 +6331,15 @@ function viewMonth(mk) {
   $("#mCredit").onclick = () => openEntry(null, +1, mk);
   $("#mExpense").onclick = () => openEntry(null, -1, mk);
   $$("[data-goover]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goover }));
-  $$("[data-goexp]").forEach(b => b.onclick = () => go({ name: "fund", id: b.dataset.goexp }));
+  // clicking anywhere on an expense row (but not the note field, which
+  // handles its own click for inline editing) both jumps to the fund AND
+  // opens that exact entry for editing in one motion, rather than making
+  // "go look at the fund" and "edit this line" two separate clicks
+  $$("[data-openrow]").forEach(tr => tr.addEventListener("click", (ev) => {
+    if (ev.target.closest(".note-edit")) return;
+    if (tr.dataset.fund) go({ name: "fund", id: tr.dataset.fund });
+    openEditEntry(tr.dataset.openrow);
+  }));
   $$("[data-editnote]").forEach(inp => {
     const commit = () => {
       const entry = state.ledger.find(x => x.id === inp.dataset.editnote);
