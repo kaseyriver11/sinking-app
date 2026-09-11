@@ -6226,7 +6226,7 @@ function viewMonth(mk) {
         </div>
         ${!past && !future ? `<div class="muted" style="font-size:11px;margin-top:14px">
             ${Math.round(elapsed * 100)}% through the month</div>
-          <div class="month-bar" style="margin-top:6px" title="${Math.round(elapsed * 100)}% through the month">
+          <div class="month-bar" style="margin-top:6px">
           <div style="width:${(elapsed * 100).toFixed(1)}%"></div></div>` : ""}
       </section>
 
