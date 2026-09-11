@@ -5243,8 +5243,22 @@ function renderRail() {
             <div class="sb-sub"><span>${meter.note}</span>${
               meter.due ? `<span class="duetag ${meter.dueTone}">${meter.due}</span>` : ""}</div>` : ""}`;
         const nameBtn = item.querySelector(".sb-name");
-        const autoPrefix = f.auto ? "⚡" + (f.dueDay ? ordinal(f.dueDay) + " " : " ") : "";
-        nameBtn.textContent = autoPrefix + f.name;
+        // .append() with a string arg always creates a plain text node (never
+        // parsed as markup), so the fund name stays exactly as safe here as
+        // textContent -- this just also needs the day styled separately from it.
+        nameBtn.replaceChildren();
+        if (f.auto) {
+          nameBtn.append("⚡");
+          if (f.dueDay) {
+            const day = document.createElement("span");
+            day.style.cssText = "font-size:11px;color:var(--text-muted);font-weight:400";
+            day.textContent = ordinal(f.dueDay) + " ";
+            nameBtn.append(day);
+          } else {
+            nameBtn.append(" ");
+          }
+        }
+        nameBtn.append(f.name);
         nameBtn.title = f.auto
           ? `${f.name} — Auto-pay${f.dueDay ? `, charged the ${ordinal(f.dueDay)}` : ", charged automatically"}`
           : f.name;
