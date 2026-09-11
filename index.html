@@ -1391,57 +1391,68 @@ const EMOJI = EMOJI_GROUPS.flatMap(g => g[1]).map(e => e.split(" ")[0]);
 const DEFAULT_ICON = "💰";
 
 /**
- * Store name -> { domain, emoji }. The domain fetches that store's real
- * favicon from a keyless, no-account favicon lookup (DuckDuckGo's icon
- * service — no image is stored or shipped in this repo, just hotlinked at
- * render time); the emoji is the fallback shown if that request fails
- * (offline, the store's favicon 404s, etc.), so a store is never left with
- * a broken-image icon. Matched case-insensitively, and only on a name that
- * starts with the key (so "Target" and "Target.com" both hit, a store
- * called "Target Range Supply" doesn't get a false match it can't un-mean).
- * Unrecognized stores just show as plain text — no icon is not an error, it
- * just means this list doesn't know that one yet.
+ * Common stores: a canonical display label (offered in the store field's
+ * dropdown so a common store can be picked, not just searched — see
+ * refreshStoreList), a domain (fetches that store's real favicon; no logo
+ * image is stored or shipped in this repo, just hotlinked at render time),
+ * and the emoji fallback shown if that request fails (offline, an
+ * unrecognized domain, etc.), so a store is never left with a broken-image
+ * icon. `keys` lists alternate ways the name gets typed in the wild (no
+ * apostrophe, no possessive) that should still match the same entry —
+ * matching itself is on whichever of label/keys the typed text *starts
+ * with*, case-insensitively, so "Target" and "Target.com" both hit but a
+ * store called "Target Range Supply" doesn't get a false match it can't
+ * un-mean. Unrecognized stores just show as plain text — no icon is not an
+ * error, it just means this list doesn't know that one yet.
+ *
+ * Favicons come from Google's keyless favicon lookup rather than
+ * DuckDuckGo's — compared side by side, DuckDuckGo silently falls back to a
+ * generic grey icon for some real domains (chick-fil-a.com among them)
+ * where Google's actually has the store's logo cached.
  */
-const STORE_ICONS = {
-  "target": { domain: "target.com", emoji: "🎯" },
-  "walmart": { domain: "walmart.com", emoji: "🛒" },
-  "costco": { domain: "costco.com", emoji: "🏬" },
-  "sam's club": { domain: "samsclub.com", emoji: "🏬" },
-  "amazon": { domain: "amazon.com", emoji: "📦" },
-  "kroger": { domain: "kroger.com", emoji: "🛒" },
-  "publix": { domain: "publix.com", emoji: "🛒" },
-  "whole foods": { domain: "wholefoodsmarket.com", emoji: "🥑" },
-  "trader joe's": { domain: "traderjoes.com", emoji: "🌴" },
-  "aldi": { domain: "aldi.us", emoji: "🛒" },
-  "safeway": { domain: "safeway.com", emoji: "🛒" },
-  "home depot": { domain: "homedepot.com", emoji: "🔨" },
-  "lowe's": { domain: "lowes.com", emoji: "🔧" },
-  "ikea": { domain: "ikea.com", emoji: "🛋️" },
-  "starbucks": { domain: "starbucks.com", emoji: "☕" },
-  "mcdonald's": { domain: "mcdonalds.com", emoji: "🍔" },
-  "chick-fil-a": { domain: "chick-fil-a.com", emoji: "🐔" },
-  "cvs": { domain: "cvs.com", emoji: "💊" },
-  "walgreens": { domain: "walgreens.com", emoji: "💊" },
-  "shell": { domain: "shell.com", emoji: "⛽" },
-  "chevron": { domain: "chevron.com", emoji: "⛽" },
-  "exxon": { domain: "exxon.com", emoji: "⛽" },
-  "bp": { domain: "bp.com", emoji: "⛽" },
-  "best buy": { domain: "bestbuy.com", emoji: "🔌" },
-  "apple": { domain: "apple.com", emoji: "🍎" },
-  "gamestop": { domain: "gamestop.com", emoji: "🎮" },
-  "petco": { domain: "petco.com", emoji: "🐾" },
-  "petsmart": { domain: "petsmart.com", emoji: "🐾" },
-  "dsw": { domain: "dsw.com", emoji: "👟" },
-  "old navy": { domain: "oldnavy.com", emoji: "👕" },
-  "gap": { domain: "gap.com", emoji: "👕" },
-  "tj maxx": { domain: "tjmaxx.com", emoji: "🏷️" },
-  "marshalls": { domain: "marshalls.com", emoji: "🏷️" },
-};
+const STORE_ICONS = [
+  { label: "Target", domain: "target.com", emoji: "🎯" },
+  { label: "Walmart", domain: "walmart.com", emoji: "🛒" },
+  { label: "Costco", domain: "costco.com", emoji: "🏬" },
+  { label: "Sam's Club", domain: "samsclub.com", emoji: "🏬", keys: ["sams club"] },
+  { label: "Amazon", domain: "amazon.com", emoji: "📦" },
+  { label: "Kroger", domain: "kroger.com", emoji: "🛒" },
+  { label: "Publix", domain: "publix.com", emoji: "🛒" },
+  { label: "Whole Foods", domain: "wholefoodsmarket.com", emoji: "🥑" },
+  { label: "Trader Joe's", domain: "traderjoes.com", emoji: "🌴", keys: ["trader joes"] },
+  { label: "Aldi", domain: "aldi.us", emoji: "🛒" },
+  { label: "Safeway", domain: "safeway.com", emoji: "🛒" },
+  { label: "Home Depot", domain: "homedepot.com", emoji: "🔨" },
+  { label: "Lowe's", domain: "lowes.com", emoji: "🔧", keys: ["lowes"] },
+  { label: "IKEA", domain: "ikea.com", emoji: "🛋️" },
+  { label: "Starbucks", domain: "starbucks.com", emoji: "☕" },
+  { label: "McDonald's", domain: "mcdonalds.com", emoji: "🍔", keys: ["mcdonalds"] },
+  { label: "Chick-fil-A", domain: "chick-fil-a.com", emoji: "🐔" },
+  { label: "Dick's Sporting Goods", domain: "dickssportinggoods.com", emoji: "🏈", keys: ["dicks sporting goods"] },
+  { label: "CVS", domain: "cvs.com", emoji: "💊" },
+  { label: "Walgreens", domain: "walgreens.com", emoji: "💊" },
+  { label: "Shell", domain: "shell.com", emoji: "⛽" },
+  { label: "Chevron", domain: "chevron.com", emoji: "⛽" },
+  { label: "Exxon", domain: "exxon.com", emoji: "⛽" },
+  { label: "BP", domain: "bp.com", emoji: "⛽" },
+  { label: "Best Buy", domain: "bestbuy.com", emoji: "🔌" },
+  { label: "Apple", domain: "apple.com", emoji: "🍎" },
+  { label: "GameStop", domain: "gamestop.com", emoji: "🎮" },
+  { label: "Petco", domain: "petco.com", emoji: "🐾" },
+  { label: "PetSmart", domain: "petsmart.com", emoji: "🐾" },
+  { label: "DSW", domain: "dsw.com", emoji: "👟" },
+  { label: "Old Navy", domain: "oldnavy.com", emoji: "👕" },
+  { label: "Gap", domain: "gap.com", emoji: "👕" },
+  { label: "TJ Maxx", domain: "tjmaxx.com", emoji: "🏷️" },
+  { label: "Marshalls", domain: "marshalls.com", emoji: "🏷️" },
+];
+const STORE_MATCH_INDEX = STORE_ICONS.flatMap(s =>
+  [s.label.toLowerCase(), ...(s.keys || [])].map(k => [k, s]));
 function storeMatch(name) {
   const n = String(name || "").trim().toLowerCase();
   if (!n) return null;
-  const hit = Object.keys(STORE_ICONS).find(k => n.startsWith(k));
-  return hit ? STORE_ICONS[hit] : null;
+  const hit = STORE_MATCH_INDEX.find(([k]) => n.startsWith(k));
+  return hit ? hit[1] : null;
 }
 /** Plain-text fallback (e.g. the live-preview span while typing a new store). */
 function storeIcon(name) {
@@ -1456,7 +1467,7 @@ function storeIcon(name) {
 function storeIconHtml(name) {
   const m = storeMatch(name);
   if (!m) return "";
-  const url = `https://icons.duckduckgo.com/ip3/${m.domain}.ico`;
+  const url = `https://www.google.com/s2/favicons?sz=64&domain=${m.domain}`;
   return `<img src="${url}" alt="" loading="lazy"
       onerror="this.style.display='none'; this.nextElementSibling.style.display='';">` +
     `<span style="display:none">${m.emoji}</span>`;
@@ -7379,8 +7390,16 @@ function openEntry(f, sign, mk = thisMonth()) {
 }
 
 /** every distinct store already used, so the datalist offers what you'd expect to type */
+/**
+ * Every common store (so one can be picked straight off the list, with its
+ * icon, before it's ever been typed) plus every store already used (so a
+ * one-off custom store is offered back too) — one combined list, so the
+ * field works as pick-a-common-one-or-search-for-anything either way.
+ */
 function refreshStoreList() {
-  const names = [...new Set(state.ledger.map(e => e.store).filter(Boolean))].sort();
+  const common = STORE_ICONS.map(s => s.label);
+  const used = state.ledger.map(e => e.store).filter(Boolean);
+  const names = [...new Set([...common, ...used])].sort((a, b) => a.localeCompare(b));
   $("#storeList").innerHTML = names.map(n => `<option value="${escapeHtml(n)}">`).join("");
 }
 
