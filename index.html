@@ -5461,6 +5461,17 @@ function viewFund(id) {
                 : `<button class="primary" id="payFixedBtn">✓ Mark paid ${money0(fx.due - fx.spent)}</button>`)
                 + (fx.paid ? "" : dueNote);
             })()}
+            ${(() => {
+              // Same one-click acknowledgment as a Fixed bill's Mark paid, same
+              // spot -- no dollar figure attached and no gate on how much has
+              // been spent, on purpose: this says "I'm done with this month,"
+              // full stop, not "the numbers agree you're done."
+              const info = scheduleInfo(f);
+              if (!info) return "";
+              const dueKey = nextDueKey(f);
+              if (dueKey > mk) return "";
+              return `<button class="primary" id="markPaidBtn">✓ Mark ${monthLabel(dueKey)} paid</button>`;
+            })()}
             ${releasableOf(f) > 0.005 ? `<button id="releaseBtn"
               title="Hand the surplus back to unallocated"
               >Release ${money0(releasableOf(f))}</button>`
@@ -5532,23 +5543,6 @@ function viewFund(id) {
             <div class="proj-verdict">${short
               ? `${ICONS.warning} <strong>${money(pr.shortfall)} short</strong> for this one.`
               : `${ICONS.good} <strong>Covered.</strong> ${monthLabel(pr.dueKey, true)}'s bill will clear.`}</div>
-            ${(() => {
-              // Once the due month has actually arrived, offer to close it out
-              // explicitly -- not just as an error fix for the short case, but
-              // because nothing else ever moves "next payment" off this month.
-              // Spending landing on the exact modeled dollar is the only other
-              // way nextDueKey() advances, and a real bill routinely never
-              // hits that exactly -- so even a month reading "Covered" would
-              // otherwise sit here indefinitely instead of handing off to
-              // next month's own tracking.
-              if (pr.dueKey > mk) return "";
-              return `<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <button class="ghost sm" id="markPaidBtn">✓ Mark ${monthLabel(pr.dueKey)} paid</button>
-                <span class="muted" style="font-size:11px">${short
-                  ? "if this is settled some other way the ledger doesn't show, or the model just doesn't match this cycle"
-                  : `closes out ${monthLabel(pr.dueKey, true)} and moves next payment on to ${monthLabel(monthShift(pr.dueKey, 1), true)}`}</span>
-              </div>`;
-            })()}
           </div>
 
           ${(() => {
