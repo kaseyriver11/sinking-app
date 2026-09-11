@@ -223,8 +223,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .expense-row:hover .note-edit:hover { background: var(--surface-1); }
 .c-store { width: 130px; }
 .c-store-inner { display: flex; align-items: center; gap: 5px; }
-.c-store-inner .note-edit { width: auto; flex: 1; }
-.store-icon { flex: none; font-size: 14px; width: 16px; text-align: center; }
+/* .note-edit's usual -3px -6px margin assumes the input owns the whole cell
+   (true for the Note column, the last one) -- here it shares the cell with
+   an icon, so the same negative horizontal margin let a focused/hovered
+   input's background bleed rightward past this column and over the Note
+   column next to it. Horizontal margin dropped; vertical kept so row height
+   still matches every other inline-edit cell. */
+/* min-width: 0 overrides the flex-item default of min-width: auto, which
+   otherwise refuses to shrink an <input> below its unconstrained content
+   width -- without it, typing a long store name grew the input's own box
+   past the 130px column and visually over the Note cell next to it, not
+   just its background. */
+.c-store-inner .note-edit { width: auto; min-width: 0; flex: 1; margin: -3px 0; }
+.store-icon { flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.store-icon img { width: 16px; height: 16px; object-fit: contain; border-radius: 3px; }
 .entries .c-amt.credit  { color: var(--credit); }
 .entries .c-amt.expense { color: var(--expense); }
 .entries tr.dead td { opacity: .45; text-decoration: line-through; }
@@ -1379,32 +1391,75 @@ const EMOJI = EMOJI_GROUPS.flatMap(g => g[1]).map(e => e.split(" ")[0]);
 const DEFAULT_ICON = "💰";
 
 /**
- * Store name -> a recognizable emoji, so "Target" in the store field shows
- * something bullseye-ish without embedding an actual trademarked logo image
- * — the same reasoning behind every other icon in this app already being a
- * plain emoji, not real brand art. Matched case-insensitively, and only on
- * a name that starts with the key (so "Target" and "Target.com" both hit,
- * a store called "Target Range Supply" doesn't get a false match it can't
- * un-mean). Unrecognized stores just show as plain text — no icon is not
- * an error, it just means this list doesn't know that one yet.
+ * Store name -> { domain, emoji }. The domain fetches that store's real
+ * favicon from a keyless, no-account favicon lookup (DuckDuckGo's icon
+ * service — no image is stored or shipped in this repo, just hotlinked at
+ * render time); the emoji is the fallback shown if that request fails
+ * (offline, the store's favicon 404s, etc.), so a store is never left with
+ * a broken-image icon. Matched case-insensitively, and only on a name that
+ * starts with the key (so "Target" and "Target.com" both hit, a store
+ * called "Target Range Supply" doesn't get a false match it can't un-mean).
+ * Unrecognized stores just show as plain text — no icon is not an error, it
+ * just means this list doesn't know that one yet.
  */
 const STORE_ICONS = {
-  "target": "🎯", "walmart": "🛒", "costco": "🏬", "sam's club": "🏬",
-  "amazon": "📦", "kroger": "🛒", "publix": "🛒", "whole foods": "🥑",
-  "trader joe's": "🌴", "aldi": "🛒", "safeway": "🛒",
-  "home depot": "🔨", "lowe's": "🔧", "ikea": "🛋️",
-  "starbucks": "☕", "mcdonald's": "🍔", "chick-fil-a": "🐔",
-  "cvs": "💊", "walgreens": "💊",
-  "shell": "⛽", "chevron": "⛽", "exxon": "⛽", "bp": "⛽",
-  "best buy": "🔌", "apple": "🍎", "gamestop": "🎮",
-  "petco": "🐾", "petsmart": "🐾",
-  "dsw": "👟", "old navy": "👕", "gap": "👕", "tj maxx": "🏷️", "marshalls": "🏷️",
+  "target": { domain: "target.com", emoji: "🎯" },
+  "walmart": { domain: "walmart.com", emoji: "🛒" },
+  "costco": { domain: "costco.com", emoji: "🏬" },
+  "sam's club": { domain: "samsclub.com", emoji: "🏬" },
+  "amazon": { domain: "amazon.com", emoji: "📦" },
+  "kroger": { domain: "kroger.com", emoji: "🛒" },
+  "publix": { domain: "publix.com", emoji: "🛒" },
+  "whole foods": { domain: "wholefoodsmarket.com", emoji: "🥑" },
+  "trader joe's": { domain: "traderjoes.com", emoji: "🌴" },
+  "aldi": { domain: "aldi.us", emoji: "🛒" },
+  "safeway": { domain: "safeway.com", emoji: "🛒" },
+  "home depot": { domain: "homedepot.com", emoji: "🔨" },
+  "lowe's": { domain: "lowes.com", emoji: "🔧" },
+  "ikea": { domain: "ikea.com", emoji: "🛋️" },
+  "starbucks": { domain: "starbucks.com", emoji: "☕" },
+  "mcdonald's": { domain: "mcdonalds.com", emoji: "🍔" },
+  "chick-fil-a": { domain: "chick-fil-a.com", emoji: "🐔" },
+  "cvs": { domain: "cvs.com", emoji: "💊" },
+  "walgreens": { domain: "walgreens.com", emoji: "💊" },
+  "shell": { domain: "shell.com", emoji: "⛽" },
+  "chevron": { domain: "chevron.com", emoji: "⛽" },
+  "exxon": { domain: "exxon.com", emoji: "⛽" },
+  "bp": { domain: "bp.com", emoji: "⛽" },
+  "best buy": { domain: "bestbuy.com", emoji: "🔌" },
+  "apple": { domain: "apple.com", emoji: "🍎" },
+  "gamestop": { domain: "gamestop.com", emoji: "🎮" },
+  "petco": { domain: "petco.com", emoji: "🐾" },
+  "petsmart": { domain: "petsmart.com", emoji: "🐾" },
+  "dsw": { domain: "dsw.com", emoji: "👟" },
+  "old navy": { domain: "oldnavy.com", emoji: "👕" },
+  "gap": { domain: "gap.com", emoji: "👕" },
+  "tj maxx": { domain: "tjmaxx.com", emoji: "🏷️" },
+  "marshalls": { domain: "marshalls.com", emoji: "🏷️" },
 };
-function storeIcon(name) {
+function storeMatch(name) {
   const n = String(name || "").trim().toLowerCase();
-  if (!n) return "";
+  if (!n) return null;
   const hit = Object.keys(STORE_ICONS).find(k => n.startsWith(k));
-  return hit ? STORE_ICONS[hit] : "";
+  return hit ? STORE_ICONS[hit] : null;
+}
+/** Plain-text fallback (e.g. the live-preview span while typing a new store). */
+function storeIcon(name) {
+  return storeMatch(name)?.emoji || "";
+}
+/**
+ * Real favicon <img> with the emoji as a same-slot fallback if it fails to
+ * load — onerror swaps this element's own display off and reveals the
+ * sibling span rather than calling back into app code, so this keeps
+ * working even rendered into a detached/cloned node.
+ */
+function storeIconHtml(name) {
+  const m = storeMatch(name);
+  if (!m) return "";
+  const url = `https://icons.duckduckgo.com/ip3/${m.domain}.ico`;
+  return `<img src="${url}" alt="" loading="lazy"
+      onerror="this.style.display='none'; this.nextElementSibling.style.display='';">` +
+    `<span style="display:none">${m.emoji}</span>`;
 }
 
 const blankState = () => ({
@@ -6410,7 +6465,7 @@ function viewMonth(mk) {
                 <td>${f ? `${escapeHtml(f.name)}
                   <span class="muted" style="font-size:11px"> · ${escapeHtml(cat ? cat.name : "")}</span>` : "—"}</td>
                 <td class="c-store"><div class="c-store-inner">
-                  <span class="store-icon" data-storeicon="${e.id}">${storeIcon(e.store)}</span>
+                  <span class="store-icon" data-storeicon="${e.id}">${storeIconHtml(e.store)}</span>
                   <input class="note-edit" data-editstore="${e.id}" value="${escapeHtml(e.store || "")}"
                     placeholder="—" list="storeList">
                 </div></td>
@@ -6453,7 +6508,7 @@ function viewMonth(mk) {
   });
   $$("[data-editstore]").forEach(inp => {
     const icon = $(`[data-storeicon="${inp.dataset.editstore}"]`);
-    inp.addEventListener("input", () => { if (icon) icon.textContent = storeIcon(inp.value); });
+    inp.addEventListener("input", () => { if (icon) icon.innerHTML = storeIconHtml(inp.value); });
     const commit = () => {
       const entry = state.ledger.find(x => x.id === inp.dataset.editstore);
       const val = inp.value.trim();
