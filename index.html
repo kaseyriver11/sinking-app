@@ -5465,11 +5465,17 @@ function viewFund(id) {
               // Same one-click acknowledgment as a Fixed bill's Mark paid, same
               // spot -- no dollar figure attached and no gate on how much has
               // been spent, on purpose: this says "I'm done with this month,"
-              // full stop, not "the numbers agree you're done."
+              // full stop, not "the numbers agree you're done." And same
+              // after-state too: Fixed's button turns into a quiet "✓ paid"
+              // label rather than just vanishing, so clicking through leaves
+              // visible confirmation instead of the row silently going empty.
               const info = scheduleInfo(f);
               if (!info) return "";
               const dueKey = nextDueKey(f);
-              if (dueKey > mk) return "";
+              if (dueKey > mk) {
+                return `<span class="muted" style="font-size:12px;align-self:center">
+                  ✓ ${escapeHtml(monthName(mk))} paid</span>`;
+              }
               return `<button class="primary" id="markPaidBtn">✓ Mark ${monthLabel(dueKey)} paid</button>`;
             })()}
             ${releasableOf(f) > 0.005 ? `<button id="releaseBtn"
