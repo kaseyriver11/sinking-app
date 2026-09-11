@@ -2842,9 +2842,20 @@ function projection(f) {
   }
   const balance = balanceOfFund(f.id);
   const projected = balance + toCome;
+  const amount = info.amountFor(dueKey);
+  // How much of the due month's modeled bill is still unaccounted for.
+  // Spending already logged against the due month (a real bill that's
+  // landed and been paid, in full or in part) already reduced the balance
+  // above -- comparing that balance against the FULL modeled amount a
+  // second time double-counts it, reading as short even when nothing more
+  // is actually owed. monthStats is 0 for a bill not due yet, so this is
+  // just `amount` unchanged in the ordinary forward-looking case (nothing
+  // spent, still saving up).
+  const spentTowardDue = monthStats({ fund: f.id }, dueKey).spent;
+  const remaining = Math.max(0, amount - spentTowardDue);
   return {
-    dueKey, amount: info.amountFor(dueKey), balance, toCome, pending, projected,
-    shortfall: Math.max(0, info.amountFor(dueKey) - projected),
+    dueKey, amount, spentTowardDue, remaining, balance, toCome, pending, projected,
+    shortfall: Math.max(0, remaining - projected),
   };
 }
 
@@ -4876,7 +4887,7 @@ function meterFor(f) {
     // contribution already recorded, say — and "of $709 needed now" beside a
     // green bar reads as a contradiction.
     const note = st.key === "short"
-      ? `${money0(pr.shortfall)} short of ${money0(pr.amount)} due ${monthLabel(pr.dueKey)}`
+      ? `${money0(pr.shortfall)} short of ${money0(pr.remaining)} ${pr.spentTowardDue > 0.005 ? "remaining" : "due"} ${monthLabel(pr.dueKey)}`
       : st.key === "behind"
         ? `Holding ${money0(bal)} · ${money0(out.gap)} short by ${monthLabel(out.troughMonth)}`
         // The annual cost is worth more than "covers the year" — it says the same
@@ -5514,15 +5525,17 @@ function viewFund(id) {
               <span class="op">=</span>
               <span><b>${money(pr.projected)}</b><i>available</i></span>
               <span class="op">vs</span>
-              <span><b>${money(pr.amount)}</b><i>due</i></span>
+              <span><b>${money(pr.remaining)}</b><i>${pr.spentTowardDue > 0.005 ? "remaining" : "due"}</i></span>
             </div>
+            ${pr.spentTowardDue > 0.005 ? `<div class="muted" style="font-size:11px;margin-top:2px">
+              ${money(pr.spentTowardDue)} already spent of the ${money(pr.amount)} modeled for ${monthLabel(pr.dueKey)}</div>` : ""}
             <div class="proj-verdict">${short
               ? `${ICONS.warning} <strong>${money(pr.shortfall)} short</strong> for this one.`
               : `${ICONS.good} <strong>Covered.</strong> ${monthLabel(pr.dueKey, true)}'s bill will clear.`}</div>
             ${short ? `<div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <button class="ghost sm" id="markPaidBtn">✓ Mark ${monthLabel(pr.dueKey)} paid</button>
-              <span class="muted" style="font-size:11px">if the real bill came in under the
-                ${money0(pr.amount)} modeled here and it's already settled</span>
+              <span class="muted" style="font-size:11px">if this is settled some other way the
+                ledger doesn't show, or the model just doesn't match this cycle</span>
             </div>` : ""}
           </div>
 
