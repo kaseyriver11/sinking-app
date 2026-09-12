@@ -4145,6 +4145,14 @@ function drawStackedColumns(box, data, series, opts = {}) {
   });
 }
 
+/**
+ * Bar fill defaults to the credit/expense sentiment of the value's sign
+ * (positive = green, negative = red) -- right for a signed magnitude like a
+ * balance, which can go either way. A row can override with an explicit
+ * `fill` when its values are never actually a balance -- e.g. "Where the
+ * money went" only ever passes positive spend amounts, which always hit the
+ * green branch by sign alone even though every one of them is an expense.
+ */
 function drawCategoryBars(box, rows, opts = {}) {
   const svg = $("svg", box);
   const W = Math.max(320, box.clientWidth || 640);
@@ -4211,7 +4219,7 @@ function drawCategoryBars(box, rows, opts = {}) {
         stroke="var(--surface-1)" stroke-width="1.5"/>
       <text x="${NAME_X}" y="${y + BAR / 2 + 4}" fill="var(--text-primary)"
         font-size="${NAME_SIZE}" font-family="var(--sans)">${escapeHtml(fitLabel(r.label, NAME_AVAIL, NAME_SIZE))}</text>
-      ${stack || (d ? `<path d="${d}" fill="${pos ? "var(--credit)" : "var(--expense)"}"/>` : "")}
+      ${stack || (d ? `<path d="${d}" fill="${r.fill || (pos ? "var(--credit)" : "var(--expense)")}"/>` : "")}
       <text x="${(pos ? xv + 9 : xv - 9).toFixed(1)}" y="${y + BAR / 2 + 4}" text-anchor="${pos ? "start" : "end"}"
         fill="var(--text-primary)" font-size="${VAL_SIZE}" font-weight="600"
         font-family="var(--sans)" style="font-variant-numeric:tabular-nums">${money0(r.value)}</text>
@@ -6711,7 +6719,7 @@ function viewMonth(mk) {
 
   const bars = rows.filter(r => r.spent > 0.005)
     .map(r => ({ id: r.f.categoryId, label: r.f.name, value: r.spent,
-                 color: (catById(r.f.categoryId) || {}).color }));
+                 color: (catById(r.f.categoryId) || {}).color, fill: "var(--expense)" }));
   drawCategoryBars($("#monthspend-box"), bars, { empty: "Nothing spent this month" });
   tableTwin("monthspend", `<th>Fund</th><th class="num">Spent</th><th class="num">Share</th>`,
     bars.map(b => `<tr><td>${escapeHtml(b.label)}</td><td class="num">${money(b.value)}</td>
