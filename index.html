@@ -235,6 +235,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    past the 130px column and visually over the Note cell next to it, not
    just its background. */
 .c-store-inner .note-edit { width: auto; min-width: 0; flex: 1; margin: -3px 0; }
+/* attachStorePicker wraps the input in .store-picker-wrap, which becomes the
+   actual flex child in this row -- the sizing above still targets the input
+   itself (harmless but no longer sufficient), so the wrapper needs its own
+   flex/min-width or the same overflow-past-the-column bug comes right back. */
+.c-store-inner .store-picker-wrap { flex: 1; min-width: 0; }
 .store-icon { flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
 .store-icon img { width: 16px; height: 16px; object-fit: contain; border-radius: 3px; }
 /* A native <datalist> can't be styled or height-capped -- with 30+ curated
@@ -243,8 +248,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    is a small hand-rolled combobox instead: filters as you type, capped and
    scrollable, closes on blur/Escape/pick. */
 .store-picker-wrap { position: relative; }
+/* left/right:0 alone ties the panel's width to the input's own -- fine in a
+   dialog, but the inline table's Store column is only ~100px, which made
+   every option wrap or truncate. min-width lets the panel be readable
+   without stretching to a page-length rectangle -- max-height (unrelated to
+   that, but the point of this component in the first place) keeps the list
+   itself capped and scrollable regardless of width. */
 .store-picker { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  min-width: 200px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 4px 14px rgba(0,0,0,0.14); max-height: 200px; overflow-y: auto; padding: 4px; }
 .store-opt { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 6px;
   cursor: pointer; font-size: 13px; }
@@ -999,8 +1010,6 @@ dialog::backdrop { background: rgba(0,0,0,0.42); }
   </form>
 </dialog>
 
-<datalist id="storeList"></datalist>
-
 <dialog id="entryDlg">
   <form method="dialog" id="entryForm">
     <div class="dlg-body">
@@ -1439,6 +1448,7 @@ const STORE_ICONS = [
   { label: "Amazon", domain: "amazon.com", emoji: "📦" },
   { label: "Kroger", domain: "kroger.com", emoji: "🛒" },
   { label: "Publix", domain: "publix.com", emoji: "🛒" },
+  { label: "Food Lion", domain: "foodlion.com", emoji: "🦁" },
   { label: "Whole Foods", domain: "wholefoodsmarket.com", emoji: "🥑" },
   { label: "Trader Joe's", domain: "traderjoes.com", emoji: "🌴", keys: ["trader joes"] },
   { label: "Aldi", domain: "aldi.us", emoji: "🛒" },
@@ -6658,7 +6668,7 @@ function viewMonth(mk) {
                 <td class="c-store"><div class="c-store-inner">
                   <span class="store-icon" data-storeicon="${e.id}">${storeIconHtml(e.store)}</span>
                   <input class="note-edit" data-editstore="${e.id}" value="${escapeHtml(e.store || "")}"
-                    placeholder="—" list="storeList">
+                    placeholder="—" autocomplete="off">
                 </div></td>
                 <td class="c-note">
                   <input class="note-edit" data-editnote="${e.id}" value="${escapeHtml(e.note || "")}" placeholder="What was it for?">
@@ -6699,7 +6709,9 @@ function viewMonth(mk) {
   });
   $$("[data-editstore]").forEach(inp => {
     const icon = $(`[data-storeicon="${inp.dataset.editstore}"]`);
-    inp.addEventListener("input", () => { if (icon) icon.innerHTML = storeIconHtml(inp.value); });
+    const updateIcon = () => { if (icon) icon.innerHTML = storeIconHtml(inp.value); };
+    inp.addEventListener("input", updateIcon);
+    attachStorePicker(inp, updateIcon);
     const commit = () => {
       const entry = state.ledger.find(x => x.id === inp.dataset.editstore);
       const val = inp.value.trim();
@@ -6709,7 +6721,6 @@ function viewMonth(mk) {
     inp.addEventListener("blur", commit);
     inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inp.blur(); } });
   });
-  refreshStoreList();
   $$("[data-rebudget]").forEach(b => b.onclick = () => {
     const f = fundById(b.dataset.rebudget), amt = Number(b.dataset.amt);
     const was = budgetOfFund(f);
@@ -7575,7 +7586,6 @@ function openEntry(f, sign, mk = thisMonth()) {
   // credit has nothing to divide and isn't "from" anywhere
   $("#e-split-btn").hidden = sign > 0;
   $("#e-store-field").hidden = sign > 0;
-  refreshStoreList();
   refreshEntrySub();
   $("#entryDlg").showModal();
   setTimeout(() => $("#e-amount").focus(), 30);
@@ -7594,22 +7604,20 @@ function storeOptionNames() {
   const used = state.ledger.map(e => e.store).filter(Boolean);
   return [...new Set([...common, ...used])].sort((a, b) => a.localeCompare(b));
 }
-/** Still backs the inline-edit inputs in the All Expenses table (see attachStorePicker
- *  for the entry/split dialogs' own, height-capped, searchable version). */
-function refreshStoreList() {
-  $("#storeList").innerHTML = storeOptionNames().map(n => `<option value="${escapeHtml(n)}">`).join("");
-}
 
 /**
  * Wires a small combobox onto a store <input>: filters storeOptionNames() as
  * you type (substring match, prefix matches ranked first), in a capped,
  * scrollable panel rather than one long list — see the .store-picker CSS
  * comment. Arrow keys move a highlight, Enter/click picks, Escape/blur
- * closes. Call once per input; the input must already sit inside an element
- * with position:relative (or use .store-picker-wrap) for the panel to anchor
- * correctly.
+ * closes. Wraps the input in its own positioning context, so it can be
+ * called on an input already sitting in a flex row (see the CSS for that
+ * wrapper alongside .store-icon in the inline table). onPick, if given,
+ * fires after a value is set by picking (not on every keystroke) -- e.g. the
+ * inline table uses it to refresh the store icon preview, since setting
+ * .value programmatically doesn't fire a native input event on its own.
  */
-function attachStorePicker(input) {
+function attachStorePicker(input, onPick) {
   let wrap = input.parentElement;
   if (!wrap.classList.contains("store-picker-wrap")) {
     wrap = document.createElement("div");
@@ -7645,6 +7653,7 @@ function attachStorePicker(input) {
   function pick(name) {
     input.value = name;
     panel.hidden = true;
+    if (onPick) onPick(name);
   }
   function highlight(i) {
     const opts = $$(".store-opt", panel);
@@ -7836,7 +7845,6 @@ function openSplit(mk = thisMonth(), prefill = {}) {
   $("#sp-date").value = prefill.date || (mk === thisMonth() ? todayStr() : mk + "-01");
   $("#sp-note").value = prefill.note || "";
   $("#sp-store").value = "";
-  refreshStoreList();
   $("#sp-rows").innerHTML = "";
   addSplitRow();
   addSplitRow();
