@@ -240,6 +240,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    itself (harmless but no longer sufficient), so the wrapper needs its own
    flex/min-width or the same overflow-past-the-column bug comes right back. */
 .c-store-inner .store-picker-wrap { flex: 1; min-width: 0; }
+/* The fund page's Expenses table shows the store as plain text, not an
+   input -- same overflow risk, different fix: a bare <span> has no width of
+   its own to constrain, so a long name just grew past the column into Note
+   exactly like the input did before min-width:0. Ellipsis reads better than
+   input-style side-scrolling for something you can't edit anyway. */
+.c-store-inner .store-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .store-icon { flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
 .store-icon img { width: 16px; height: 16px; object-fit: contain; border-radius: 3px; }
 /* A native <datalist> can't be styled or height-capped -- with 30+ curated
@@ -5966,7 +5972,7 @@ function renderEntryTable(fundId, which) {
       <td class="num c-amt ${which}">${sign}${money(Math.abs(e.amount))}</td>
       ${which === "expense" ? `<td class="c-store"><div class="c-store-inner">
         <span class="store-icon">${storeIconHtml(e.store)}</span>
-        <span>${escapeHtml(e.store || "—")}</span>
+        <span class="store-name">${escapeHtml(e.store || "—")}</span>
       </div></td>` : ""}
       <td class="c-note">${escapeHtml(e.note || "—")}${
         e.splitId ? ` <span class="tag" data-tip="${escapeHtml(splitTip(e))}">split</span>` : ""}</td>
