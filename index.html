@@ -237,9 +237,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .c-store-inner .note-edit { width: auto; min-width: 0; flex: 1; margin: -3px 0; }
 /* attachStorePicker wraps the input in .store-picker-wrap, which becomes the
    actual flex child in this row -- the sizing above still targets the input
-   itself (harmless but no longer sufficient), so the wrapper needs its own
-   flex/min-width or the same overflow-past-the-column bug comes right back. */
+   itself, which is no longer a flex item at all once it's nested one level
+   deeper (its parent is now a plain block div, not .c-store-inner), so
+   flex:1/min-width:0 on it do nothing and width:auto falls back to the
+   input's own intrinsic content width -- wide enough, with a real store
+   name in it, to visibly overflow the wrapper's box into Note, since a
+   block div doesn't clip an overflowing child by default. The wrapper
+   itself needs the flex/min-width now, and the input just needs to fill it. */
 .c-store-inner .store-picker-wrap { flex: 1; min-width: 0; }
+.store-picker-wrap input.note-edit { width: 100%; }
 /* The fund page's Expenses table shows the store as plain text, not an
    input -- same overflow risk, different fix: a bare <span> has no width of
    its own to constrain, so a long name just grew past the column into Note
