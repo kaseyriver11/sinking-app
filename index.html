@@ -7591,17 +7591,26 @@ function openEntry(f, sign, mk = thisMonth()) {
   setTimeout(() => $("#e-amount").focus(), 30);
 }
 
-/** every distinct store already used, so the datalist offers what you'd expect to type */
 /**
  * Every common store (so one can be picked straight off the list, with its
  * icon, before it's ever been typed) plus every store already used (so a
  * one-off custom store is offered back too) — one combined list, so the
  * field works as pick-a-common-one-or-search-for-anything either way.
+ *
+ * A used value that's just an alternate spelling of a curated store (typed
+ * before the curated list existed, or before an alias was added — "Dicks
+ * Sporting Goods" for "Dick's Sporting Goods") is left out of its own right:
+ * otherwise the same store shows up twice for no reason a user would
+ * recognize. Matched on the exact known forms (label + aliases,
+ * case-insensitive) rather than storeMatch()'s looser startsWith, so a
+ * genuinely more specific real entry ("Target Optical") still gets to keep
+ * its own spot rather than being swallowed by "Target".
  */
-/** Every common store plus every store already used, alphabetized. */
 function storeOptionNames() {
   const common = STORE_ICONS.map(s => s.label);
-  const used = state.ledger.map(e => e.store).filter(Boolean);
+  const knownForms = new Set(STORE_MATCH_INDEX.map(([k]) => k));
+  const used = state.ledger.map(e => e.store).filter(Boolean)
+    .filter(s => !knownForms.has(s.toLowerCase()));
   return [...new Set([...common, ...used])].sort((a, b) => a.localeCompare(b));
 }
 
