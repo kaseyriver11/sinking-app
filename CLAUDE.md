@@ -201,6 +201,54 @@ While disconnected the app still works and still saves to the localStorage mirro
 
 To avoid the prompt entirely, either install the page as a Chrome app (⋮ → Cast, save and share → Install page as app), which unlocks persistent file permissions, or move saving to the local server that `start.command` already runs.
 
+## Cloud sync (Google login + Supabase)
+
+**Revisited 2026-09-10** (see Scope, above): multi-device access became a real need, so this exists now alongside local file mode, not instead of it. Follows the same pattern already proven on a sibling project (DVCalc): Supabase (Postgres + Google OAuth + Row-Level Security) + GitHub Pages, no custom backend server. The app is hosted at the GitHub Pages URL; local file mode needs none of this and is completely unaffected by it.
+
+**Design principle: sign-in is additive, not a gate.** Local file mode — everything from "Data model" through "Durability layers" above — works exactly as documented whether or not anyone ever signs in. Signing in switches *where this session persists to*; it doesn't remove anything that exists today. The two modes don't merge automatically: switching from a local file to a signed-in account is a one-time, explicit import (below), not something that happens silently.
+
+### Schema
+
+`db/schema.sql` mirrors the local `funds.json` shape as one Postgres table per entity — `categories`, `funds`, `fund_budgets` (the dated `budgets[]` series), `ledger`, `cash_readings`, `card_readings`, `plans` (earmarks), `incomes`, `one_offs`, `settings`, and `profiles` (1:1 with `auth.users`, auto-created via trigger on signup). Every table carries `user_id uuid references profiles(id)`, Row-Level Security enabled, one policy shape everywhere: `for all using (auth.uid() = user_id) with check (auth.uid() = user_id)`.
+
+Two decisions carried over from local mode's own reasoning, adapted:
+
+- **The app's own generated ids stay the primary key** (`text`, not a DB-generated `uuid`) — no app-id↔DB-id mapping layer, and a transfer's two legs (`pairId`) or a split's parts (`splitId`) keep working exactly as they do locally, since they're just a shared value across sibling rows either way.
+- **No tombstones in the cloud schema.** `meta.deleted` exists locally to solve one specific problem — a disconnected session's stale write resurrecting something deleted elsewhere — resolved by `mergeStates()`. Postgres is a live, always-connected source of truth, so a `DELETE` is just gone; `on delete cascade` FKs clean up a fund's ledger rows/budgets or a category's funds automatically, for free, unlike local mode's manual bookkeeping.
+
+`schedule_amounts` (a Varying fund's 12-slot array) stays `jsonb` rather than a child table — same reasoning as local mode's own in-memory shape: it's only ever read or written as one atomic unit, never queried by individual month server-side.
+
+Schema changes after the initial `schema.sql` are dated files in `db/migrations/`, run manually in Supabase's SQL editor — not a real migration tool, same spirit as `tests/rebuild.py` slicing harnesses fresh rather than trusting a hand-maintained copy:
+
+| Migration | Adds |
+|---|---|
+| `001_add_sort_order.sql` | `sort_order` on `categories`/`funds` — array position is display order locally; a SQL row has no inherent order, so this stands in for it |
+| `002_add_ledger_store.sql` | `ledger.store` |
+| `003_add_fund_paid_months.sql` | `funds.paid_months` |
+| `004_add_fund_auto.sql` | `funds.auto` |
+
+**A schema change needs the migration run before the code that writes it ships, not after — this was gotten wrong twice.** Supabase/PostgREST here doesn't reject a write that includes a column the table doesn't have yet; it silently drops that one field and writes the rest. The `store` field's rollout shipped code before its migration was confirmed run, and every ledger write since that deploy quietly lost its `store` value with no error anywhere — the *only* symptom was store data not showing up, until the exact same gap (this time on `funds.paid_months`) was caught directly by testing before it could repeat as a user-visible surprise. **Ship the migration first, or expect the new field to silently not stick until it's run** — there is no error to notice.
+
+### Read path
+
+On boot, if a Supabase session exists, `fetchAppState()` (`auth.js`) fetches every table for that user and reshapes the rows back into the exact nested shape `funds.json` already uses (the inverse of the schema mapping above), then hands it to `loadCloudState()`, which runs it through the same `normalize()` every local load already goes through — no separate cloud-specific validation path, since `normalize()` already tolerates and coerces arbitrary/partial shapes. Returns `null` (not an empty-but-valid state) when there are no categories yet, so a session with nothing synced doesn't blank out whatever's currently loaded.
+
+A real, once-live bug here: `boot()`'s local-file path and `auth.js`'s cloud-session path are two independent async chains that both kick off on every page load with no coordination — whichever happened to resolve *last* silently won, including a stale local file clobbering an already-loaded cloud session back to local data with the wrong sync-pill text. Fixed with a `cloudActive` flag, checked before and after every `await` on the local-file path (`boot()`, `loadFromDir()`); once cloud has won, the local path bails out rather than racing it.
+
+### Write path
+
+Every mutation function (`addEntry`, `editEntry`, `moveMoney`, `addFund`, …) keeps its existing synchronous local write completely unchanged, then fires one additional call to `window.CloudSync.*` — fire-and-forget, gated on being signed in, added *after* the local mutation the same way `save()` itself is already async and un-awaited by every caller. This is what keeps the entire local test suite valid with zero rewrites: tests call these functions directly against in-memory `state` and already stub the local `save()` out entirely, and `window.CloudSync?.` is always optional-chained so a test environment with no module loaded just no-ops.
+
+`cloudCall()` (`auth.js`) wraps every write in `withRetry()` — a currently-open Supabase/PostgREST platform bug (`PGRST303 "JWT issued at future"`, a stale timestamp cache in its JWT validator) can reject a freshly-minted token moments after sign-in; retried a few times with a short delay rather than let one transient rejection block a just-signed-in session.
+
+**Cloud write failures are surfaced, not swallowed.** `onCloudSyncError`/`onCloudSyncOk` (`index.html`) pin the sync pill to a visible red error with the real message on any failed write, and — this needed a second fix — **don't auto-clear on a later, unrelated success**: a single mutation can fire several cloud writes in sequence (`syncFund` writes the fund row, then replaces its `fund_budgets` rows), and an earlier real failure followed by a later success used to flip the pill straight back to "saved," erasing the only sign anything had gone wrong. An error now stays up until the pill is clicked (which re-verifies against the cloud rather than just dismissing) or a fresh load re-establishes ground truth.
+
+### Migrating existing local data in
+
+A one-time push of whatever's currently loaded into the signed-in account, from the `•••` menu — confirms first, checks the cloud side is actually empty (`fetchAppState()` returns nothing) before writing anything, then batches every entity through the same per-row sync functions ordinary edits already use (categories and funds in one upsert each, `ledger` chunked at 500 rows, one round trip per other entity) rather than one row at a time, which the first version was — slow enough on a real ~30-fund budget to look hung, and each of ~90+ sequential round trips was its own chance to hit the `PGRST303` bug above before `cloudCall()`'s retry could even apply.
+
+One-directional by design so far: local data can be pushed up to a fresh cloud account, but there's no export-back-to-local for a cloud account's data beyond the existing JSON/CSV snapshot in the `•••` menu, which round-trips through the same local-file shape either way.
+
 ## Status
 
 **Phase**: schema v10. A parse check plus 27 suites, 2,121 assertions, all passing. Visually reviewed in a browser for the first time on 2026-09-08 — see "Partially verified" below for exactly what that covered.
@@ -509,6 +557,26 @@ Each row is a search-or-pick field (an `<input>` bound to a `<datalist>` of ever
 
 Deliberately not run through the duplicate guard: a split is inherently several same-day, same-note entries, and per-leg duplicate-checking would flag exactly the pattern it's supposed to produce.
 
+### Store metadata on expenses
+
+Expenses can carry an optional `store` field (e.g. "Target"), shown with a recognizable icon rather than plain text — a purely informational tag, no different in kind from the note, just structured enough to render an icon from.
+
+**Icons are real favicons, hotlinked at render time, not logo assets in this repo.** `STORE_ICONS` is a curated array of common retailers — `{ label, domain, emoji, keys }` — matched case-insensitively against whatever's typed, on a *starts-with* basis (`storeMatch()`), so "Target" and "Target.com" both hit but a store literally named "Target Range Supply" doesn't get a false match it can't un-mean. `keys` lists alternate spellings worth matching to the same entry ("mcdonalds" without the apostrophe, "sams club" without the possessive). The icon itself comes from Google's keyless favicon lookup (`https://www.google.com/s2/favicons?...`), with the curated `emoji` as the fallback if that request fails — DuckDuckGo's equivalent was tried first and silently falls back to a generic grey icon for some real domains (`chick-fil-a.com` among them) where Google's actually has the logo cached, found by comparing the two side by side rather than assuming.
+
+**The store field's dropdown is a small hand-rolled combobox** (`attachStorePicker`), not a native `<datalist>` — with 30+ curated stores plus every one ever typed, a `<datalist>` opens one long, unstyleable, unscrollable list the moment you click in, before you've even typed anything to narrow it down. The replacement filters `storeOptionNames()` live as you type (substring match, prefix matches ranked first), in a panel capped at 200px with its own scroll, arrow keys to move a highlight, Enter or click to pick, Escape/blur to close. Wired onto the Add Expense dialog, the Split dialog, and the inline per-row editor in the Month page's All Expenses table — all three read from the same combined list: every curated store's proper label (so one can be *picked*, not just typed) plus every store already used in the ledger (so a one-off custom store is offered back too).
+
+**A used value that's just an alternate spelling of a curated store doesn't get its own separate entry.** Typed once before an alias existed — "Dicks Sporting Goods," missing the apostrophe on the curated "Dick's Sporting Goods" — it would otherwise show up as a second, seemingly-duplicate option. `storeOptionNames()` filters used values against the curated set's exact known forms (label + aliases, case-insensitive) before including them — stricter than `storeMatch()`'s looser starts-with, so a genuinely more specific real entry ("Target Optical") still gets to keep its own spot rather than being swallowed into "Target."
+
+Shown in three places: the entry dialog (expenses only — a budget credit has nothing to be "from"), the Month page's All Expenses table (inline-editable, with a live icon preview as you type), and the fund page's own Expenses table (read-only there, matching how that table's Note column isn't inline-editable either).
+
+**Three layout bugs, all the same underlying trap** — a column sharing space with an icon can't reuse the blend-in trick built for a column an input owns outright:
+
+1. `.note-edit`'s usual `-3px -6px` margin (so a hovered/focused input's background fills the cell without changing layout at rest) assumes the input owns the whole cell — true for Note, the last column, false here, where it shares the cell with the store icon. The negative right margin let a focused input's background bleed rightward over Note. Horizontal margin dropped for this one column; vertical kept.
+2. A flex item's default `min-width: auto` refuses to shrink an `<input>` below its own unconstrained content width — typing a long store name grew the input's own box (not just its background) past the column and over Note. Fixed with `min-width: 0`.
+3. `attachStorePicker` wraps the input one level deeper, inside its own positioning `<div>`, so the input stops being a flex item of the row at all — `flex: 1`/`min-width: 0` on the input itself (from fix #2) do nothing there, and `width: auto` falls back to the input's intrinsic content width again, which a plain block wrapper doesn't clip. The wrapper needed the flex sizing instead, and the input just needed `width: 100%` to fill it.
+
+The fund page's read-only version needed the equivalent fix for a `<span>` instead of an `<input>`: no width of its own to constrain, so `min-width: 0` plus `text-overflow: ellipsis` on that specific `.store-name` class.
+
 ### Smaller things that earn their place
 
 - **The month-funded nudge.** The monthly funding is a manual click and forgetting it is the one failure that breaks everything quietly: balances drift, statuses go wrong, and nothing says why. `monthFunding()` counts funds that *should* have been funded against those that were, so a half-finished month is caught too, and it leads the needs-attention list rather than sitting among the per-fund problems.
@@ -525,6 +593,10 @@ One page per month, reached from **This month** in the header or `t`. The same s
 Arrows step month to month (never past next month). Mid-month it shows a progress bar for the month itself. Per fund: **planned / budgeted / spent / remaining**, where *planned* is the budget for a level fund and the bill itself for a scheduled one — a scheduled fund's remaining reads `—` because outspending its monthly budget in a due month is the design, not a miss. (Called *Difference* until it was pointed out that "$500 planned, $98 spent, difference $402" doesn't read as an answer to any question you'd actually ask — *remaining* does.)
 
 A finished month with anything over plan grows a **Worth a look** section, and each row offers `Budget $520` — one click to make the budget match what actually happened. Budgets are dated, so that changes *this month onward* and leaves the history alone.
+
+Every logged expense for the month also appears in a single flat **All expenses** table below the per-fund breakdown — a place to answer "what did I spend this month" without paging through each fund individually. Date, amount, fund, store, and note per row, newest first.
+
+**Clicking a row does two things at once**: jumps to that entry's fund *and* opens the entry itself for editing, rather than making "go look at the fund" and "edit this line" two separate clicks. Note and Store are inline-editable directly in the table (blur or Enter commits, a no-op if nothing actually changed) — for exactly those two fields editing doesn't need the full entry dialog, since neither touches the amount or fund, and re-navigating away just to fix a typo would defeat the point of a fast-glance table.
 
 ### Bill calendar
 
@@ -552,6 +624,22 @@ A fifth fund type, `fixed: true` — the same amount every month, like Netflix o
 **An optional `dueDay` (1–31) turns "is this paid" into "is this late".** Not every Fixed bill has one — some don't land on a predictable day — so it defaults to unset and unset never flags anything, whatever the balance. `fixedPaid(f, mk)` returns `{ due, spent, paid, dueDay, dueToday, overdue }`: `overdue` only fires for the *current* month, only once the day has actually passed, and never once `paid` is true. Reaching the due day itself is `dueToday`, not `overdue` — the day arriving isn't lateness yet, so it earns a quiet badge rather than a needs-attention row.
 
 `baseStatus()` gives an overdue Fixed bill its own key, `billoverdue`, ranked alongside `short` — urgent, but a click away from fixed, not catastrophic like overdrawn. It carries `pay` (the amount still owed) rather than `fix`: `issues()` and the needs-attention list route it to an expense (**Mark paid**), not a credit, because crediting an already-funded bill would double it. The rail badge and the fund-page hero badge read **Overdue** or **Due today**; the fund page also shows **Due the 15th** as a quiet caption when neither applies. Marking paid clears the badge and drops the fund off the needs-attention list exactly like any other fix.
+
+### Varying funds: Mark Paid, and the shortfall math it exposed
+
+Fixed bills get a one-click **Mark paid** because the amount is never in question — the same figure every month, so "did it go out yet" is the only thing left to answer. A Varying fund's real bill is never a known quantity in the same way, which broke the naive version of "is this month done" twice over before landing on the current shape.
+
+**The shortfall formula double-counted a payment that had already happened.** `projection()` compared the fund's *balance* against the schedule's full modeled amount for the month, even after a real bill had already been paid against it — and paying a bill reduces balance, so that comparison re-charged the same payment a second time. A real bill of $379.13, paid in full against a $400 modeled figure, left $20.87 in the fund and read as "$379.13 short of $400" — technically consistent with the model, actually backwards: the bill was done, $20.87 to spare. Fixed by netting whatever's already been spent toward the due month off the modeled amount first (`remaining = amount − spentTowardDue`), then comparing available funds against *that*. `spentTowardDue` is 0 for a bill not yet due, so this is a no-op in the ordinary forward-looking case — it only changes anything once spending has actually landed against the due month. The fund page's "Next payment" panel shows "remaining" instead of "due," with a line naming what's already been spent, whenever that's nonzero.
+
+**Fixing the math still wasn't enough on its own.** `nextDueKey()` only advances past a due month once spending reaches the modeled amount exactly (or the month is explicitly marked paid, below) — a real bill routinely differs from a smoothing curve, so even a month that now correctly reads "Covered" would sit there indefinitely instead of handing off to the next month's own tracking, confirmed live: a fund's "Next payment" stayed parked on the same month even after the shortfall fix made it read as covered.
+
+**Mark Paid is the explicit override, for both of the above and anything else the math can't resolve on its own** — settled some other way the ledger doesn't show, or the model just doesn't match this cycle. Mirrors Fixed bills' own button exactly: same spot (the page's hero row, not buried in the schedule detail card), same styling, no dollar figure attached, and — deliberately — no gate on how much has actually been spent. "I'm done with this month" is a plain statement of fact, not a number the app gets to second-guess; clicking it works identically whether $1 or the full modeled amount has been logged. Stored as `fund.paidMonths` (`['YYYY-MM', …]`), checked by `nextDueKey()` alongside the exact-amount match. The button turns into a quiet **✓ Paid** label afterward rather than just disappearing — a Fixed bill already does this, and an earlier version's silent vanish gave no confirmation a click had done anything. The same ✓/pay pattern lives in the rail row too, in the same slot Fixed bills use, gated on the month actually having a bill due (`scheduleInfo(f).isDue(thisMonth())`) — the same restraint already used for the "Due now" badge elsewhere.
+
+### Auto-pay
+
+A separate concept from paid/unpaid, easy to conflate but answering a different question: **auto-pay is who initiates the charge** (the bank/card, on its own); **Mark Paid is whether the ledger knows it happened yet**. Without a bank feed, the app only ever learns a bill was charged once it's logged — autopay or not — so one never substitutes for the other, and turning auto-pay on doesn't hide or suppress Mark Paid; both sit in the same spot, and a fund can be autopaid and still need marking once the real charge lands.
+
+`fund.auto` — a checkbox in the fund editor, shown for Fixed and Varying only, the two kinds that ever prompt for a manual payment in the first place. Shown as a small **⚡**: prefixed onto the fund's name in the rail (`⚡12th TV`, the day de-emphasized in the same grey used for "Spent \$X of \$Y" captions, so it reads as an afterthought next to the name rather than a second headline), and as **"⚡ Auto-pay · 12th"** on the fund's own page. The day reuses the existing `dueDay` field — extended from Fixed-only to Varying too, since it's the same real-world concept either way — rather than inventing a parallel field for the same idea.
 
 ### Undo instead of confirm
 
@@ -807,9 +895,13 @@ Originally run on JavaScriptCore via `osascript -l JavaScript` (macOS-only). Por
 
 **Colours**: series blue clears 3:1 on both surfaces. Credit green / expense red measure CVD ΔE 7.8 light / 7.1 dark against an 8.0 target — the "legal only with secondary encoding" band, satisfied four times over (separate tables, explicit signs, labelled dots, above/below the zero rule). Identity hues 9–16 are for choice, not reliability.
 
+**A shared bar-chart component's sentiment colouring silently broke when reused for spend-only data.** `drawCategoryBars()` fills a bar green for a positive value and red for a negative one — correct for a signed balance (Balance by category/by fund, which can genuinely go either way), wrong for "Where the money went," which only ever passes positive spend magnitudes: every bar hit the green branch by sign alone, despite every one of them being an expense, while the row's own identity dot stayed correctly hued. Fixed with an optional per-row `fill` override that wins over the sign-based default, set to the expense colour for that one caller — the two balance-based callers don't set it, so they keep the sentiment colouring that's actually correct for them. Worth remembering before reusing this component again: it colours by *sign*, not by what the number represents.
+
 **Partially verified, 2026-09-08**: a real Chrome pass (against `127.0.0.1:8756`, live `data/funds.json`) clicked through Overview, This month, Plan, Forecast, a category page and a fund page, the Add expense and Quick expense dialogs, and the Split expense dialog both from its own flow and hand-off from Add expense. No console errors on any of it. Still unverified: everything not listed above — most dialogs (Fund the month, Move, earmarks, category/fund edit, cash and card readings, one-offs), the reorder-mode rail, and the router's less common paths. Every suite still tests logic or emitted SVG, never a real DOM, so this pass is the only line of defense against a wiring mistake outside what was actually clicked.
 
 A forecast what-if feature (two sliders: income %, a flat monthly amount) was built, tested and verified working in this same pass, then reverted at the user's request — it answered "what if income changed economy-wide," not the actual question ("what if I moved money between categories"). See Known gaps below for what's actually wanted.
+
+**Partially verified, 2026-09-12** (cloud sync and this session's other features): real Chrome passes against the deployed GitHub Pages app confirmed sign-in, the cloud read/write round trip (a test ledger entry written, confirmed present via a direct fetch of the account's own Supabase data, then deleted), the store combobox and its favicon rendering, Mark Paid on a Varying fund correctly advancing `nextDueKey()` and round-tripping through Supabase, and the Auto-pay tag showing alongside — not instead of — Mark Paid. Same caveat as above: a real click confirms wiring, not logic; the suites are still the only thing checking the math.
 
 ## Known gaps
 
